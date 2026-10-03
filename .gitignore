@@ -1,0 +1,14 @@
+node_modules/
+
+.env
+.env.production
+
+db/token
+db/refreshToken
+db/market-history/
+db/candles/
+db/trend-orders/
+db/option-depth/
+
+*.log
+.DS_Store
