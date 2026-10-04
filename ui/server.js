@@ -28,7 +28,7 @@ const history = await createMarketHistory({
   directory: path.resolve(rootDirectory, process.env.MARKET_HISTORY_DIR || "db/market-history"),
 })
 const depthHistory = await createMarketDepthHistory({
-  directory: path.join(rootDirectory, "db", "option-depth"),
+  directory: path.join(rootDirectory, "db", "cash-depth"),
 })
 history.record("recorder_start", { stocks: stocks.length })
 await history.flush()
@@ -143,7 +143,7 @@ function controlStatus() {
         message: !runningState ? stream.message
           : depthError ? depthError : !hasLiveSocket ? stream.message
             : stream.received?.depth
-              ? `WebSocket receiving depth updates · ${stream.received.depth} stock / ${stream.optionDepth?.received || 0} option · last ${stream.lastDepthAt || "unknown"}`
+              ? `WebSocket receiving cash depth updates · ${stream.received.depth} stock updates · last ${stream.lastDepthAt || "unknown"}`
               : "WebSocket connected and depth subscribed · waiting for first depth update",
         stockUpdates: stream.received?.depth || 0,
         optionUpdates: stream.optionDepth?.received || 0,
@@ -298,7 +298,6 @@ app.post("/api/control/start", async (_request, response) => {
       clientId: process.env.FYERS_CLIENT_ID,
       accessToken: CONSTANT.access_token,
       history,
-      optionContracts: nextTrading.optionContracts,
       depthHistory,
       onMarket: (kind, data, at) => {
         nextTrading.observe(kind, data, at)

@@ -1,27 +1,22 @@
 import apiV3 from "fyers-api-v3"
 import { normalizeTick, toFyersSymbol, toStockName } from "./market-data.js"
-import { indexOptionContracts, selectNearAtmOptions } from "./option-chain.js"
 import { depthUpdateFields, marketDepthSession } from "./market-depth.js"
 
 const { fyersDataSocket: FyersDataSocket } = apiV3
 
 export function createMarketFeed({
   io, stocks, clientId, accessToken, history, socketFactory = FyersDataSocket,
-  optionContracts = new Map(), depthHistory,
+  depthHistory,
   onMarket = () => {}, onGap = () => {}, onReady = () => {}, clock = () => new Date(),
 }) {
   const allowedStocks = new Set(stocks)
   const stockSymbols = stocks.map(toFyersSymbol)
-  const contractMap = optionContracts instanceof Map ? optionContracts : new Map()
-  const optionIndex = indexOptionContracts(contractMap)
   const stockDepthFiles = new Map(stocks.map((stock) => {
     const symbol = toFyersSymbol(stock)
     return [symbol, { symbol }]
   }))
   const prices = new Map()
-  const selectedByStock = new Map()
-  const selectedOptionSymbolSet = new Set()
-  const preparedOptionSymbols = new Set()
+  const latestMarketContext = new Map()
   const depthSubscribedSymbols = new Set()
   let dataSocket = null
   let stopping = false
@@ -29,12 +24,9 @@ export function createMarketFeed({
   let terminalError = false
   let connected = false
   let connectionEpoch = 0
-  let optionSyncRequested = false
-  let optionSyncRunning = null
-  let depthStorageError = null
-  let optionDepthReceived = 0
   let depthStateDate = null
   const depthFieldState = new Map()
+  const lastDepthCheckpointAt = new Map()
   const received = { price: 0, depth: 0 }
   const lastReceived = new Map()
   let lastDepthAt = null
@@ -45,6 +37,7 @@ export function createMarketFeed({
       onGap()
       depthStateDate = null
       depthFieldState.clear()
+      lastDepthCheckpointAt.clear()
     }
     else onReady()
     status = createStatus(state, message)
@@ -68,10 +61,6 @@ export function createMarketFeed({
     socket.emit("feed:status", status)
   }
 
-  function selectedOptionSymbols() {
-    return new Set([...selectedOptionSymbolSet].filter((symbol) => preparedOptionSymbols.has(symbol)))
-  }
-
   function depthBookUpdate(message, receivedAt) {
     const session = marketDepthSession(receivedAt)
     if (!session.open) return false
@@ -79,6 +68,7 @@ export function createMarketFeed({
     if (!fields) return false
     if (depthStateDate !== session.date) {
       depthFieldState.clear()
+      lastDepthCheckpointAt.clear()
       depthStateDate = session.date
     }
     const previous = depthFieldState.get(message.symbol) || new Map()
@@ -103,66 +93,8 @@ export function createMarketFeed({
     })
   }
 
-  function requestOptionDepthSync() {
-    optionSyncRequested = true
-    if (optionSyncRunning) return optionSyncRunning
-    optionSyncRunning = (async () => {
-      while (optionSyncRequested && !stopping) {
-        optionSyncRequested = false
-        if (!connected) continue
-        const epoch = connectionEpoch
-        const desired = new Set([...stockSymbols, ...selectedOptionSymbols()])
-        const additions = [...desired].filter((symbol) => !depthSubscribedSymbols.has(symbol))
-        const removals = [...depthSubscribedSymbols].filter((symbol) => !desired.has(symbol))
-        let changed = false
-        if (additions.length) {
-          await dataSocket.subscribe(additions, true, 1)
-          if (stopping || !connected || epoch !== connectionEpoch) continue
-          for (const symbol of additions) depthSubscribedSymbols.add(symbol)
-          changed = true
-        }
-        if (removals.length) {
-          await dataSocket.unsubscribe(removals, true, 1)
-          if (stopping || !connected || epoch !== connectionEpoch) continue
-          for (const symbol of removals) depthSubscribedSymbols.delete(symbol)
-          changed = true
-        }
-        if (changed && status.state === "live") {
-          publishStatus("live", liveMessage())
-        }
-      }
-    })().catch((error) => {
-      if (!stopping) failFeed(error)
-    }).finally(() => {
-      optionSyncRunning = null
-      if (optionSyncRequested && connected && !stopping) void requestOptionDepthSync()
-    })
-    return optionSyncRunning
-  }
-
-  function updateOptionSelection(stock, spot) {
-    if (!depthHistory || !contractMap.size) return
-    const contracts = selectNearAtmOptions(optionIndex, toFyersSymbol(stock), spot)
-    const key = contracts.map((contract) => contract.symbol).sort().join("|")
-    const previous = selectedByStock.get(stock) || []
-    if (key === previous.map((contract) => contract.symbol).sort().join("|")) return
-
-    selectedByStock.set(stock, contracts)
-    selectedOptionSymbolSet.clear()
-    for (const selected of selectedByStock.values()) {
-      for (const contract of selected) selectedOptionSymbolSet.add(contract.symbol)
-    }
-    void depthHistory.prepare(contracts).then(() => {
-      for (const contract of contracts) preparedOptionSymbols.add(contract.symbol)
-      if (!stopping) void requestOptionDepthSync()
-    }).catch((error) => {
-      depthStorageError = error.message
-      console.error(`Cannot prepare option depth files for ${stock}:`, error.message)
-    })
-  }
-
   function liveMessage() {
-    return `Live - ${stocks.length} NSE stocks and ${selectedOptionSymbols().size} option contracts subscribed`
+    return `Live - ${stocks.length} NSE cash stocks subscribed for depth`
   }
 
   function markReconnecting() {
@@ -202,29 +134,21 @@ export function createMarketFeed({
       const receivedAt = clock()
       if (item.type === "dp") {
         const stock = toStockName(item.symbol)
-        const isStock = allowedStocks.has(stock)
-        const optionContract = isStock ? null : contractMap.get(item.symbol)
-        const optionStock = optionContract ? toStockName(optionContract.underlying) : null
-        if (!isStock && (!optionContract || !allowedStocks.has(optionStock) || !selectedOptionSymbolSet.has(item.symbol))) continue
+        if (!allowedStocks.has(stock)) continue
         const book = depthBookUpdate(item, receivedAt)
         if (!book) continue
-        if (isStock) {
-          // Keep every valid partial update plus the reconstructed top-five book.
-          history?.record("depth", item, receivedAt)
-          depthHistory?.record(stockDepthFiles.get(item.symbol), item, receivedAt, book)
-          onMarket("depth", item, receivedAt)
-          received.depth++
-          lastDepthAt = receivedAt.toISOString()
-          lastReceived.set(stock, { ...lastReceived.get(stock), depth: receivedAt.toISOString() })
-        } else {
-          depthHistory?.record(optionContract, item, receivedAt, book)
-          optionDepthReceived++
-          lastDepthAt = receivedAt.toISOString()
-          lastReceived.set(optionStock, {
-            ...lastReceived.get(optionStock),
-            optionDepth: receivedAt.toISOString(),
-          })
-        }
+        // Store a full book on the first update and every minute; keep each raw change between checkpoints.
+        const lastCheckpoint = lastDepthCheckpointAt.get(item.symbol)
+        const checkpointDue = lastCheckpoint == null || receivedAt.getTime() - lastCheckpoint >= 60_000
+        if (checkpointDue) lastDepthCheckpointAt.set(item.symbol, receivedAt.getTime())
+        depthHistory?.record(
+          stockDepthFiles.get(item.symbol), item, receivedAt, checkpointDue ? book : null,
+          latestMarketContext.get(stock) || null,
+        )
+        onMarket("depth", item, receivedAt)
+        received.depth++
+        lastDepthAt = receivedAt.toISOString()
+        lastReceived.set(stock, { ...lastReceived.get(stock), depth: receivedAt.toISOString() })
         continue
       }
 
@@ -237,6 +161,13 @@ export function createMarketFeed({
       onMarket("price", item, receivedAt)
       received.price++
       lastReceived.set(tick.symbol, { ...lastReceived.get(tick.symbol), price: receivedAt.toISOString() })
+      const cumulativeVolume = Number(item.vol_traded_today)
+      latestMarketContext.set(tick.symbol, {
+        price: tick.price,
+        priceAt: tick.updatedAt,
+        priceReceivedAt: receivedAt.toISOString(),
+        cumulativeVolume: Number.isSafeInteger(cumulativeVolume) && cumulativeVolume >= 0 ? cumulativeVolume : null,
+      })
 
       const previous = prices.get(tick.symbol)
       const next = {
@@ -251,7 +182,6 @@ export function createMarketFeed({
 
       prices.set(tick.symbol, next)
       io.emit("stocks:update", next)
-      updateOptionSelection(tick.symbol, tick.price)
     }
   }
 
@@ -265,7 +195,7 @@ export function createMarketFeed({
       priceMode: "full",
       priceChannel: 1,
       depthChannel: 1,
-      optionDepthSelection: "nearest expiry, ATM and one listed strike on each side, CE and PE",
+      depthScope: "NSE cash equities only",
       sdk: "fyers-api-v3",
     })
     if (!clientId || !accessToken) {
@@ -292,16 +222,12 @@ export function createMarketFeed({
           await dataSocket.mode(dataSocket.FullMode, 1)
           if (stopping || epoch !== connectionEpoch) return
           // Keep quote and depth subscriptions on channel 1 for this SDK version.
-          const depthSymbols = [...new Set([...stockSymbols, ...selectedOptionSymbols()])]
+          const depthSymbols = stockSymbols
           await dataSocket.subscribe(depthSymbols, true, 1)
           if (stopping || epoch !== connectionEpoch) return
           for (const symbol of depthSymbols) depthSubscribedSymbols.add(symbol)
           connected = true
-          publishStatus(
-            "live",
-            `Live · ${stocks.length} NSE stocks and ${selectedOptionSymbols().size} option contracts subscribed`,
-          )
-          void requestOptionDepthSync()
+          publishStatus("live", liveMessage())
         } catch (error) {
           if (!stopping && epoch === connectionEpoch) failFeed(error)
         }
@@ -352,9 +278,9 @@ export function createMarketFeed({
       depthSubscribedSymbols: depthSubscribedSymbols.size,
       lastDepthAt,
       optionDepth: {
-        received: optionDepthReceived,
-        selectedSymbols: selectedOptionSymbols().size,
-        storageError: depthStorageError,
+        received: 0,
+        selectedSymbols: 0,
+        storageError: null,
       },
     }
   }

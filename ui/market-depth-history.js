@@ -1,8 +1,8 @@
-import { mkdir, open } from "node:fs/promises"
+import { appendFile, mkdir, open } from "node:fs/promises"
 import path from "node:path"
+import { marketDepthSession } from "./market-depth.js"
 
-// Each stock and option file remains valid JSON. Appends replace only the final
-// closing bracket, so a long-running session does not rewrite the full history.
+// Daily JSONL files keep each depth update independently appendable.
 export async function createMarketDepthHistory({
   directory,
   flushIntervalMs = 250,
@@ -45,100 +45,60 @@ export async function createMarketDepthHistory({
     onError(error)
   }
 
-  async function prepareOne(contract) {
-    if (!contract || typeof contract.symbol !== "string" || !contract.symbol.startsWith("NSE:") ||
-        typeof contract.underlying !== "string" || !contract.underlying.startsWith("NSE:") ||
-        !["CE", "PE"].includes(contract.optionType)) {
-      throw new TypeError("Invalid option contract for depth history")
-    }
-    const stock = contract.underlying.slice(4).replace(/-EQ$/, "")
-    const filename = contract.symbol.slice(4)
-    return prepareFile({ symbol: contract.symbol, stock, filename: `${filename}.json` })
+  function fileKey(symbol, date) {
+    return `${date}|${symbol}`
   }
 
-  async function prepareStock(stock) {
+  async function prepareStock(stock, date = marketDepthSession(new Date()).date) {
     const symbol = `NSE:${stock}-EQ`
-    return prepareFile({ symbol, stock, filename: `${stock}.json` })
+    return prepareFile({ symbol, stock, filename: `${stock}.jsonl`, date })
   }
 
-  async function prepareFile({ symbol, stock, filename }) {
-    if (!/^[A-Z0-9&._-]+$/i.test(stock) || !/^[A-Z0-9&._-]+\.json$/i.test(filename)) {
+  async function prepareFile({ symbol, stock, filename, date }) {
+    if (!/^[A-Z0-9&._-]+$/i.test(stock) || !/^[A-Z0-9&._-]+\.jsonl$/i.test(filename) ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       throw new TypeError("Unsafe stock or market symbol in depth history")
     }
-    if (files.has(symbol)) return
-    if (preparing.has(symbol)) return preparing.get(symbol)
+    const key = fileKey(symbol, date)
+    if (files.has(key)) return
+    if (preparing.has(key)) return preparing.get(key)
 
     const task = (async () => {
       if (closed || failure) throw failure || new Error("Market depth history is closed")
-      const stockDirectory = path.join(directory, stock)
+      const stockDirectory = path.join(directory, date, stock)
       await mkdir(stockDirectory, { recursive: true })
       const fullPath = path.join(stockDirectory, filename)
-      let handle
-      try {
-        handle = await open(fullPath, "r+")
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error
-        handle = await open(fullPath, "wx+")
-        const header = JSON.stringify({ schemaVersion: 1, stock, symbol, history: [] }) + "\n"
-        await handle.writeFile(header, "utf8")
-      }
-
-      try {
-        const info = await handle.stat()
-        if (info.size < 3) throw new Error(`Invalid market depth history file: ${fullPath}`)
-        const suffix = Buffer.alloc(3)
-        const suffixRead = await handle.read(suffix, 0, 3, info.size - 3)
-        if (suffixRead.bytesRead !== 3 || suffix.toString("utf8") !== "]}\n") {
-          throw new Error(`Market depth history file has an incomplete JSON tail: ${fullPath}`)
-        }
-        const bracketPosition = info.size - 3
-        const prior = Buffer.alloc(1)
-        const priorRead = await handle.read(prior, 0, 1, bracketPosition - 1)
-        if (priorRead.bytesRead !== 1 || !["[", "}"].includes(prior.toString("utf8"))) {
-          throw new Error(`Market depth history file has an invalid history array: ${fullPath}`)
-        }
-        files.set(symbol, {
-          path: fullPath,
-          bracketPosition,
-          hasRecords: prior.toString("utf8") === "}",
-        })
-      } finally {
-        await handle.close()
-      }
+      const handle = await open(fullPath, "a")
+      await handle.close()
+      files.set(key, { path: fullPath })
     })()
 
-    preparing.set(symbol, task)
+    preparing.set(key, task)
     try {
       await task
     } finally {
-      preparing.delete(symbol)
-    }
-  }
-
-  async function prepare(contracts) {
-    try {
-      await Promise.all(contracts.map(prepareOne))
-    } catch (error) {
-      fail(error)
-      throw error
+      preparing.delete(key)
     }
   }
 
   async function prepareStocks(stocks) {
     try {
-      await Promise.all(stocks.map(prepareStock))
+      const date = marketDepthSession(new Date()).date
+      await Promise.all(stocks.map((stock) => prepareStock(stock, date)))
     } catch (error) {
       fail(error)
       throw error
     }
   }
 
-  function record(contract, data, receivedAt = new Date(), book = null) {
+  function record(contract, data, receivedAt = new Date(), book = null, marketContext = null) {
     if (closed || failure) {
       rejectedRecords++
       return false
     }
-    const file = files.get(contract?.symbol)
+    const date = marketDepthSession(receivedAt).date
+    const key = fileKey(contract?.symbol, date)
+    const file = files.get(key)
     if (!file) {
       rejectedRecords++
       return false
@@ -146,8 +106,11 @@ export async function createMarketDepthHistory({
     let serialized
     try {
       serialized = JSON.stringify({
+        schemaVersion: 1,
+        kind: book ? "checkpoint" : "update",
         receivedAt: receivedAt.toISOString(),
         data,
+        ...(marketContext ? { marketContext } : {}),
         ...(book ? { book } : {}),
       })
     } catch (error) {
@@ -165,44 +128,23 @@ export async function createMarketDepthHistory({
       fail(new Error("Market depth history buffer capacity exceeded; recording stopped."))
       return false
     }
-    const items = queue.get(contract.symbol) || []
+    const items = queue.get(key) || []
     items.push(serialized)
-    queue.set(contract.symbol, items)
+    queue.set(key, items)
     bufferedBytes += bytes
     acceptedRecords++
     if (!timer && !writing) timer = setTimeout(() => { void flush() }, flushIntervalMs)
     return true
   }
 
-  async function writeAll(handle, value, position) {
-    const data = Buffer.from(value, "utf8")
-    let offset = 0
-    while (offset < data.length) {
-      const result = await handle.write(data, offset, data.length - offset, position + offset)
-      if (!result.bytesWritten) throw new Error("Could not append market depth history")
-      offset += result.bytesWritten
-    }
-  }
-
   async function drain() {
     while (queue.size && !failure) {
       const batch = queue
       queue = new Map()
-      for (const [symbol, records] of batch) {
-        const file = files.get(symbol)
-        if (!file) throw new Error(`Market depth history file was not prepared for ${symbol}`)
-        const joined = records.join(",")
-        const prefix = file.hasRecords ? "," : ""
-        const suffix = `${prefix}${joined}]}\n`
-        const handle = await open(file.path, "r+")
-        try {
-          await handle.truncate(file.bracketPosition)
-          await writeAll(handle, suffix, file.bracketPosition)
-        } finally {
-          await handle.close()
-        }
-        file.bracketPosition += Buffer.byteLength(prefix + joined)
-        file.hasRecords = true
+      for (const [key, records] of batch) {
+        const file = files.get(key)
+        if (!file) throw new Error(`Market depth history file was not prepared for ${key}`)
+        await appendFile(file.path, `${records.join("\n")}\n`, "utf8")
         bufferedBytes -= records.reduce((total, item) => total + Buffer.byteLength(item), 0)
         writtenRecords += records.length
         lastWrittenAt = new Date().toISOString()
@@ -227,5 +169,5 @@ export async function createMarketDepthHistory({
     if (failure) throw failure
   }
 
-  return { prepare, prepareStocks, record, flush, close, status }
+  return { prepareStocks, record, flush, close, status }
 }
