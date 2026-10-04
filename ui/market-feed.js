@@ -72,7 +72,7 @@ export function createMarketFeed({
     return new Set([...selectedOptionSymbolSet].filter((symbol) => preparedOptionSymbols.has(symbol)))
   }
 
-  function isNewDepthUpdate(message, receivedAt) {
+  function depthBookUpdate(message, receivedAt) {
     const session = marketDepthSession(receivedAt)
     if (!session.open) return false
     const fields = depthUpdateFields(message)
@@ -82,15 +82,25 @@ export function createMarketFeed({
       depthStateDate = session.date
     }
     const previous = depthFieldState.get(message.symbol) || new Map()
-    let changed = false
     const next = new Map(previous)
-    for (const [key, value] of fields) {
-      if (!previous.has(key) || previous.get(key) !== value) changed = true
-      next.set(key, value)
-    }
-    if (!changed) return false
+    for (const [key, value] of fields) next.set(key, value)
     depthFieldState.set(message.symbol, next)
-    return true
+    return {
+      bids: depthLevels(next, "bid"),
+      asks: depthLevels(next, "ask"),
+    }
+  }
+
+  function depthLevels(fields, side) {
+    return Array.from({ length: 5 }, (_, index) => {
+      const level = index + 1
+      return {
+        level,
+        price: fields.get(`${side}_price${level}`) ?? null,
+        size: fields.get(`${side}_size${level}`) ?? null,
+        orders: fields.get(`${side}_order${level}`) ?? null,
+      }
+    })
   }
 
   function requestOptionDepthSync() {
@@ -192,21 +202,22 @@ export function createMarketFeed({
       const receivedAt = clock()
       if (item.type === "dp") {
         const stock = toStockName(item.symbol)
-        if (allowedStocks.has(stock)) {
-          if (!isNewDepthUpdate(item, receivedAt)) continue
-          // Keep the raw partial update after validating its fields and market window.
+        const isStock = allowedStocks.has(stock)
+        const optionContract = isStock ? null : contractMap.get(item.symbol)
+        const optionStock = optionContract ? toStockName(optionContract.underlying) : null
+        if (!isStock && (!optionContract || !allowedStocks.has(optionStock) || !selectedOptionSymbolSet.has(item.symbol))) continue
+        const book = depthBookUpdate(item, receivedAt)
+        if (!book) continue
+        if (isStock) {
+          // Keep every valid partial update plus the reconstructed top-five book.
           history?.record("depth", item, receivedAt)
-          depthHistory?.record(stockDepthFiles.get(item.symbol), item, receivedAt)
+          depthHistory?.record(stockDepthFiles.get(item.symbol), item, receivedAt, book)
           onMarket("depth", item, receivedAt)
           received.depth++
           lastDepthAt = receivedAt.toISOString()
           lastReceived.set(stock, { ...lastReceived.get(stock), depth: receivedAt.toISOString() })
         } else {
-          const optionContract = contractMap.get(item.symbol)
-          const optionStock = optionContract ? toStockName(optionContract.underlying) : null
-          if (!optionContract || !allowedStocks.has(optionStock) || !selectedOptionSymbolSet.has(item.symbol) ||
-              !isNewDepthUpdate(item, receivedAt)) continue
-          depthHistory?.record(optionContract, item, receivedAt)
+          depthHistory?.record(optionContract, item, receivedAt, book)
           optionDepthReceived++
           lastDepthAt = receivedAt.toISOString()
           lastReceived.set(optionStock, {

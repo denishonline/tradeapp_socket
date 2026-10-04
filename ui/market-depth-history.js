@@ -133,7 +133,7 @@ export async function createMarketDepthHistory({
     }
   }
 
-  function record(contract, data, receivedAt = new Date()) {
+  function record(contract, data, receivedAt = new Date(), book = null) {
     if (closed || failure) {
       rejectedRecords++
       return false
@@ -145,7 +145,11 @@ export async function createMarketDepthHistory({
     }
     let serialized
     try {
-      serialized = JSON.stringify({ receivedAt: receivedAt.toISOString(), data })
+      serialized = JSON.stringify({
+        receivedAt: receivedAt.toISOString(),
+        data,
+        ...(book ? { book } : {}),
+      })
     } catch (error) {
       rejectedRecords++
       fail(error)

@@ -65,7 +65,14 @@ const preloader = createHistoryPreloader({
   getAccessToken: accessToken,
   stocks,
   store: candles,
-  onStatus: (status) => io.emit("history:status", status),
+  onStatus: (status) => {
+    io.emit("history:status", status)
+    if (status.state === "complete" || status.state === "partial") {
+      void stockSnapshot().then((snapshot) => io.emit("stocks:snapshot", snapshot)).catch((error) => {
+        console.error("Cannot refresh stored stock prices:", error.message)
+      })
+    }
+  },
 })
 
 function state(status, message) {
@@ -81,8 +88,28 @@ function hasToken() {
   return Boolean(accessToken())
 }
 
-function stockSnapshot() {
-  return stocks.map((symbol) => ({ symbol, price: null, change: null, changePercent: null, updatedAt: null }))
+async function stockSnapshot() {
+  const storedQuotes = await Promise.all(stocks.map(async (symbol) => {
+    const recent = await candles.read(symbol, { limit: 2 })
+    const latest = recent.at(-1)
+    const previous = recent.at(-2)
+    if (!latest) return { symbol, price: null, change: null, changePercent: null, updatedAt: null }
+
+    const change = previous ? latest.close - previous.close : null
+    return {
+      symbol,
+      price: latest.close,
+      change,
+      changePercent: previous?.close ? (change / previous.close) * 100 : null,
+      updatedAt: new Date(latest.time * 1000).toISOString(),
+    }
+  }))
+
+  const liveQuotes = new Map((feed?.snapshot() || []).map((quote) => [quote.symbol, quote]))
+  return storedQuotes.map((stored) => {
+    const live = liveQuotes.get(stored.symbol)
+    return Number.isFinite(live?.price) ? { ...stored, ...live } : stored
+  })
 }
 
 function controlStatus() {
@@ -165,7 +192,7 @@ async function stopMarketEngine(message = "Market stream stopped") {
   await currentFeed?.stop()
   await currentTrading?.close()
   engineStatus = state("stopped", message)
-  io.emit("stocks:snapshot", stockSnapshot())
+  io.emit("stocks:snapshot", await stockSnapshot())
   io.emit("feed:status", engineStatus)
   io.emit("strategy:rankings", { buy: [], sell: [] })
   emitControlStatus()
@@ -384,11 +411,11 @@ app.use(express.static(publicDirectory, {
 app.get("*", (_request, response) => response.sendFile(path.join(publicDirectory, "index.html")))
 
 io.on("connection", (socket) => {
-  if (feed) feed.sendSnapshot(socket)
-  else {
-    socket.emit("stocks:snapshot", stockSnapshot())
-    socket.emit("feed:status", engineStatus)
-  }
+  void stockSnapshot().then((snapshot) => socket.emit("stocks:snapshot", snapshot)).catch((error) => {
+    console.error("Cannot load stored stock prices:", error.message)
+    socket.emit("stocks:snapshot", stocks.map((symbol) => ({ symbol, price: null, change: null, changePercent: null, updatedAt: null })))
+  })
+  socket.emit("feed:status", feed?.getStatus() || engineStatus)
   socket.emit("control:status", controlStatus())
   socket.emit("history:status", preloader.status())
   socket.emit("strategy:rankings", trading?.rankings() || { buy: [], sell: [] })
