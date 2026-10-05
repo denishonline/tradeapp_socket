@@ -1,11 +1,11 @@
 const elements = Object.fromEntries([
   "stockList", "searchInput", "stockCount", "connectionChip", "connectionText",
   "autoLoginButton", "preCandlesButton", "startServerButton", "authLabel",
-  "historyLabel", "serverLabel", "serverActionLabel", "orderMode", "buyList", "sellList",
+  "historyLabel", "serverLabel", "serverActionLabel", "orderMode", "strategySignalGroups",
   "captureServerStatus", "captureServerMessage", "captureDepthStatus", "captureDepthMessage",
   "captureCandleStatus", "captureCandleMessage",
   "chartSymbol", "chartPrice", "chartChange", "chartSubtitle", "chartWrap", "candleChart",
-  "chartEmpty", "marketTime", "toast",
+  "chartEmpty", "databaseSize", "liveTime", "toast",
 ].map((id) => [id, document.querySelector(`#${id}`)]))
 
 const stocks = new Map()
@@ -53,10 +53,7 @@ socket.on("stocks:update", (tick) => {
   paintStock(tick.symbol)
   if (tick.symbol === selectedSymbol) paintSelectedQuote()
 })
-socket.on("strategy:rankings", (rankings) => {
-  renderRankings(elements.buyList, rankings.buy || [], "buy")
-  renderRankings(elements.sellList, rankings.sell || [], "sell")
-})
+socket.on("strategy:signals", (signals) => renderStrategySignals(signals || []))
 socket.on("candle:update", ({ symbol, candle }) => {
   if (symbol !== selectedSymbol) return
   liveMinute = candle
@@ -73,12 +70,10 @@ elements.stockList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-symbol]")
   if (button) selectStock(button.dataset.symbol)
 })
-for (const list of [elements.buyList, elements.sellList]) {
-  list.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-symbol]")
-    if (button) selectStock(button.dataset.symbol)
-  })
-}
+elements.strategySignalGroups.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-symbol]")
+  if (button) selectStock(button.dataset.symbol)
+})
 elements.autoLoginButton.addEventListener("click", () => runControl("/api/control/autologin", elements.autoLoginButton, "AutoLogin started"))
 elements.preCandlesButton.addEventListener("click", () => runControl("/api/control/pre-candles", elements.preCandlesButton, "Historical candle fetch started"))
 elements.startServerButton.addEventListener("click", () => {
@@ -141,6 +136,7 @@ function applyControlStatus(next) {
   const history = control.history || {}
   const server = control.server || {}
   const capture = control.capture || {}
+  const database = control.database || {}
   if (startRequestPending && ["armed", "live", "error"].includes(server.state)) {
     startRequestPending = false
     clearTimeout(startTimeout)
@@ -177,6 +173,7 @@ function applyControlStatus(next) {
   elements.orderMode.dataset.mode = control.orderMode || "unknown"
   setCaptureStatus(elements.captureServerStatus, elements.captureServerMessage, capture.server, server)
   setCaptureStatus(elements.captureDepthStatus, elements.captureDepthMessage, capture.depth, server)
+  elements.databaseSize.textContent = `db/ size: ${formatBytes(database.sizeBytes)}`
   setCaptureStatus(elements.captureCandleStatus, elements.captureCandleMessage, capture.candles, server)
   if (server.state) {
     setFeedStatus(
@@ -193,6 +190,19 @@ function setCaptureStatus(container, messageElement, detail, server) {
   container.dataset.state = state
   messageElement.textContent = detail?.message || server?.message || "Status unavailable"
   messageElement.title = messageElement.textContent
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "calculating..."
+  if (bytes < 1024) return `${bytes} B`
+  const units = ["KB", "MB", "GB", "TB"]
+  let size = bytes / 1024
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit++
+  }
+  return `${size.toFixed(2)} ${units[unit]}`
 }
 
 function setFeedStatus(state, message) {
@@ -290,15 +300,33 @@ function upsertCandle(candle) {
   drawChart()
 }
 
-function renderRankings(container, items, side) {
-  if (!items.length) {
-    container.innerHTML = `<p class="placeholder">Collecting the 100-minute baseline…</p>`
+function renderStrategySignals(signals) {
+  if (!signals.length) {
+    elements.strategySignalGroups.innerHTML = `<p class="placeholder">Waiting for candle and depth conditions…</p>`
     return
   }
-  container.innerHTML = items.map((item, index) => {
-    const score = side === "buy" ? item.buyScore : item.sellScore
-    return `<button type="button" class="ranking-row" data-symbol="${escapeHtml(item.stock)}"><span class="rank">${index + 1}</span><span class="ranking-symbol"><strong>${escapeHtml(item.stock)}</strong><small>${item.completedMinutes}/100 min</small></span><span class="ranking-price">${money.format(item.price)}<small>${score} score</small></span></button>`
-  }).join("")
+  const groups = new Map()
+  for (const signal of signals) {
+    const strategy = signal.strategy || "Other strategies"
+    if (!groups.has(strategy)) groups.set(strategy, [])
+    groups.get(strategy).push(signal)
+  }
+  elements.strategySignalGroups.innerHTML = [...groups.entries()].map(([strategy, items]) => `
+    <section class="strategy-signal-group">
+      <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>${items.length}</span></div>
+      <div class="strategy-signal-list">${items.map((signal) => {
+        const at = Date.parse(signal.time)
+        const signalTime = Number.isFinite(at) ? `${axisTime.format(new Date(at))} IST` : "Time unavailable"
+        const state = signal.status || "Signal"
+        const direction = signal.pattern
+          ? `${signal.direction || "SELL"} · ${signal.pattern} · `
+          : signal.direction ? `${signal.direction} · ` : ""
+        return `<button type="button" class="strategy-signal-row" data-symbol="${escapeHtml(signal.symbol)}">
+          <span class="strategy-signal-copy"><strong>${escapeHtml(signal.symbol)}</strong><small>${direction}${signalTime} · ${money.format(signal.price)}</small></span>
+          <span class="strategy-signal-state" data-state="${escapeHtml(state.toLowerCase().replaceAll(" ", "-"))}">${escapeHtml(state)}</span>
+        </button>`
+      }).join("")}</div>
+    </section>`).join("")
 }
 
 function drawChart() {
@@ -386,7 +414,7 @@ function escapeHtml(value) {
 }
 
 function updateClock() {
-  elements.marketTime.textContent = time.format(new Date())
+  elements.liveTime.textContent = `Live time: ${time.format(new Date())} IST`
 }
 
 updateClock()

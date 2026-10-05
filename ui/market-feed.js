@@ -45,6 +45,12 @@ export function createMarketFeed({
     io.emit("feed:status", status)
   }
 
+  function markMarketDataLive() {
+    if (connected && status.state !== "live") {
+      publishStatus("live", liveMessage())
+    }
+  }
+
   function snapshot() {
     return stocks.map((symbol) => ({
       symbol,
@@ -145,10 +151,11 @@ export function createMarketFeed({
           stockDepthFiles.get(item.symbol), item, receivedAt, checkpointDue ? book : null,
           latestMarketContext.get(stock) || null,
         )
-        onMarket("depth", item, receivedAt)
+        onMarket("depth", item, receivedAt, latestMarketContext.get(stock) || null)
         received.depth++
         lastDepthAt = receivedAt.toISOString()
         lastReceived.set(stock, { ...lastReceived.get(stock), depth: receivedAt.toISOString() })
+        markMarketDataLive()
         continue
       }
 
@@ -161,6 +168,7 @@ export function createMarketFeed({
       onMarket("price", item, receivedAt)
       received.price++
       lastReceived.set(tick.symbol, { ...lastReceived.get(tick.symbol), price: receivedAt.toISOString() })
+      markMarketDataLive()
       const cumulativeVolume = Number(item.vol_traded_today)
       latestMarketContext.set(tick.symbol, {
         price: tick.price,
@@ -227,7 +235,7 @@ export function createMarketFeed({
           if (stopping || epoch !== connectionEpoch) return
           for (const symbol of depthSymbols) depthSubscribedSymbols.add(symbol)
           connected = true
-          publishStatus("live", liveMessage())
+          publishStatus("connecting", "WebSocket connected and subscribed · waiting for first market update")
         } catch (error) {
           if (!stopping && epoch === connectionEpoch) failFeed(error)
         }
@@ -265,6 +273,11 @@ export function createMarketFeed({
       dataSocket?.close()
     } catch {
       // The process is already shutting down, so no further action is needed.
+    } finally {
+      // The FYERS SDK caches a singleton. Release it so Stop/Start obtains a
+      // fresh socket instead of reusing the closed instance.
+      if (dataSocket && socketFactory.instance === dataSocket) socketFactory.instance = undefined
+      dataSocket = null
     }
     await depthHistory?.flush()
   }

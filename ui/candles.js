@@ -120,7 +120,7 @@ export async function createCandleStore({ directory, symbols }) {
   return { append, read, fillMissingHistory, replaceHistory: fillMissingHistory }
 }
 
-export function createLiveCandleBuilder({ store, io, now = () => Date.now(), onError = () => {} }) {
+export function createLiveCandleBuilder({ store, io, now = () => Date.now(), onError = () => {}, onComplete = () => {} }) {
   const states = new Map()
   let closed = false
 
@@ -138,6 +138,8 @@ export function createLiveCandleBuilder({ store, io, now = () => Date.now(), onE
       throw error
     }
     io.emit("candle:complete", { symbol, candle, stored: result?.added !== false })
+    try { onComplete(symbol, candle) }
+    catch (error) { console.error(`Cannot evaluate ${symbol} strategy candle:`, error.message) }
     return result?.added !== false
   }
 

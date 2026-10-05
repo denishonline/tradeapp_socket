@@ -1,10 +1,10 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="FYERS live depth strategy and one-minute candle dashboard" />
-    <title>Market Pulse · Trading Dashboard</title>
+    <title>Market Pulse Â· Trading Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -19,17 +19,21 @@
               <span class="step">1</span><span><strong>AutoLogin</strong><small id="authLabel">Session</small></span>
             </button>
             <button class="action-button" id="preCandlesButton" type="button">
-              <span class="step">2</span><span><strong>Fetch Pre Candles</strong><small id="historyLabel">30 days · 1 minute</small></span>
+              <span class="step">2</span><span><strong>Fetch Pre Candles</strong><small id="historyLabel">30 days Â· 1 minute</small></span>
             </button>
             <button class="action-button primary" id="startServerButton" type="button">
               <span class="step">3</span><span><strong id="serverActionLabel">Start Server</strong><small id="serverLabel">Price + depth streams</small></span>
             </button>
           </div>
           <div class="status-group">
-            <div class="mode-badge" id="orderMode">Order mode: —</div>
-            <div class="connection-chip" data-state="stopped" id="connectionChip">
-              <span class="status-dot" aria-hidden="true"></span>
-              <span id="connectionText">Market stream stopped</span>
+            <div class="mode-badge" id="orderMode">Order mode: â€”</div>
+            <div class="live-status-stack">
+              <div class="connection-chip" data-state="stopped" id="connectionChip">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="connectionText">Market stream stopped</span>
+              </div>
+              <small id="databaseSize">db/ size: calculating...</small>
+              <small id="liveTime">Live time: --:--:-- IST</small>
             </div>
           </div>
         </section>
@@ -45,14 +49,14 @@
           </div>
           <div class="capture-status" data-state="stopped" id="captureCandleStatus">
             <span class="capture-dot" aria-hidden="true"></span>
-            <span class="capture-copy"><strong>Stock candles · 1 min</strong><small id="captureCandleMessage">Waiting for server start</small></span>
+            <span class="capture-copy"><strong>Stock candles Â· 1 min</strong><small id="captureCandleMessage">Waiting for server start</small></span>
           </div>
         </section>
 
         <section class="workspace" aria-label="Trading workspace">
           <aside class="panel stock-panel">
             <div class="panel-heading">
-              <div><h2>All stocks</h2><p id="stockCount">Loading symbols…</p></div>
+              <div><h2>All stocks</h2><p id="stockCount">Loading symbolsâ€¦</p></div>
               <label class="search-box"><span class="sr-only">Search stocks</span><input id="searchInput" type="search" placeholder="Search" autocomplete="off" /></label>
             </div>
             <div class="stock-list" id="stockList" aria-live="polite"></div>
@@ -60,27 +64,21 @@
 
           <aside class="panel strategy-panel">
             <div class="panel-heading">
-              <div><h2>Strategy radar</h2><p>100-minute baseline · live depth</p></div>
+              <div><h2>Strategy radar</h2><p>Candle + depth momentum</p></div>
             </div>
-            <section class="ranking-section">
-              <div class="ranking-title"><span class="signal-dot buy"></span><h3>Top 5 buy</h3><small>UP PRESSURE</small></div>
-              <div class="ranking-list" id="buyList"><p class="placeholder">Waiting for strategy warm-up…</p></div>
-            </section>
-            <section class="ranking-section">
-              <div class="ranking-title"><span class="signal-dot sell"></span><h3>Top 5 sell</h3><small>DOWN PRESSURE</small></div>
-              <div class="ranking-list" id="sellList"><p class="placeholder">Waiting for strategy warm-up…</p></div>
-            </section>
-            <p class="strategy-note">Scores rank depth pressure; they are not guaranteed trade signals.</p>
+            <div class="strategy-signal-groups" id="strategySignalGroups" aria-live="polite">
+              <p class="placeholder">Waiting for candle and depth conditionsâ€¦</p>
+            </div>
+            <p class="strategy-note">Signals appear after the confirming one-minute candle closes.</p>
           </aside>
 
           <section class="panel chart-panel">
             <div class="chart-heading">
               <div>
-                <p class="eyebrow">1 MINUTE · LAST 360</p>
-                <div class="chart-title"><h2 id="chartSymbol">Select a stock</h2><span id="chartPrice">—</span><span id="chartChange"></span></div>
+                <p class="eyebrow">1 MINUTE Â· LAST 360</p>
+                <div class="chart-title"><h2 id="chartSymbol">Select a stock</h2><span id="chartPrice">â€”</span><span id="chartChange"></span></div>
                 <p id="chartSubtitle">Click any symbol to open its stored and live candles.</p>
               </div>
-              <div class="market-clock"><strong id="marketTime">--:--:--</strong><span>IST</span></div>
             </div>
             <div class="chart-wrap" id="chartWrap">
               <canvas id="candleChart" aria-label="One-minute candlestick chart"></canvas>
@@ -97,3 +95,4 @@
     <script type="module" src="/app.js"></script>
   </body>
 </html>
+

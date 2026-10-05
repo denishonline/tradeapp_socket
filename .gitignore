@@ -9,6 +9,7 @@ db/market-history/
 db/candles/
 db/trend-orders/
 db/option-depth/
+db/cash-depth/
 
 *.log
 .DS_Store

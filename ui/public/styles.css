@@ -39,6 +39,8 @@ button { color: inherit; }
 
 .connection-chip { display: flex; align-items: center; max-width: 52vw; min-height: 32px; gap: 9px; padding: 7px 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: rgba(255, 255, 255, .9); font-size: 11px; font-weight: 650; white-space: nowrap; box-shadow: 0 2px 8px rgba(34, 49, 76, .05); }
 .connection-chip span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.live-status-stack { display: grid; min-width: 0; justify-items: end; gap: 3px; }
+.live-status-stack > small { color: var(--muted); font-size: 8px; font-weight: 600; white-space: nowrap; }
 .status-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--subtle); box-shadow: 0 0 0 4px rgba(104, 114, 134, .1); }
 .connection-chip[data-state="live"] { color: #087653; border-color: rgba(7, 134, 95, .24); background: rgba(7, 134, 95, .07); }
 .connection-chip[data-state="live"] .status-dot { background: var(--green); box-shadow: 0 0 0 4px rgba(34, 201, 138, .1); animation: pulse 2s infinite; }
@@ -104,20 +106,21 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 .negative { color: var(--red) !important; }
 
 .strategy-panel { display: flex; flex-direction: column; }
-.ranking-section { display: flex; min-height: 0; flex: 1 1 0; flex-direction: column; padding: 13px 12px 5px; border-bottom: 1px solid var(--border-soft); }
-.ranking-title { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; margin-bottom: 8px; }
-.ranking-title h3 { font-size: 10px; }
-.ranking-title small { color: var(--subtle); font-size: 7px; font-weight: 800; letter-spacing: .08em; }
-.signal-dot { width: 6px; height: 6px; border-radius: 50%; }
-.signal-dot.buy { background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
-.signal-dot.sell { background: var(--red); box-shadow: 0 0 0 4px var(--red-soft); }
-.ranking-list { min-height: 0; flex: 1 1 auto; overflow: auto; scrollbar-color: #c5cdd9 transparent; scrollbar-width: thin; }
-.ranking-row { display: grid; width: 100%; grid-template-columns: 20px 1fr auto; align-items: center; gap: 7px; padding: 7px 6px; border: 0; border-radius: 7px; cursor: pointer; background: transparent; text-align: left; }
-.rank { display: grid; width: 19px; height: 19px; place-items: center; border: 1px solid var(--border); border-radius: 6px; color: var(--subtle); background: #f7f9fc; font: 700 8px ui-monospace, monospace; }
-.ranking-symbol, .ranking-price { display: grid; gap: 2px; }
-.ranking-symbol strong, .ranking-price { font-size: 9px; }
-.ranking-symbol small, .ranking-price small { color: var(--subtle); font-size: 7px; }
-.ranking-price { justify-items: end; font-variant-numeric: tabular-nums; }
+.strategy-signal-groups { min-height: 0; flex: 1 1 auto; overflow: auto; scrollbar-color: #c5cdd9 transparent; scrollbar-width: thin; }
+.strategy-signal-group { padding: 12px; border-bottom: 1px solid var(--border-soft); }
+.strategy-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.strategy-group-heading h3 { font-size: 10px; }
+.strategy-group-heading > span { min-width: 18px; padding: 3px 6px; border-radius: 99px; color: var(--blue); background: var(--blue-soft); font-size: 8px; font-weight: 800; text-align: center; }
+.strategy-signal-list { display: grid; gap: 3px; }
+.strategy-signal-row { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: space-between; gap: 7px; padding: 7px; border: 0; border-radius: 7px; cursor: pointer; background: transparent; text-align: left; }
+.strategy-signal-row:hover { background: var(--blue-soft); }
+.strategy-signal-copy { display: grid; min-width: 0; gap: 3px; }
+.strategy-signal-copy strong { font-size: 9px; }
+.strategy-signal-copy small { color: var(--subtle); font-size: 8px; }
+.strategy-signal-state { flex: 0 0 auto; padding: 3px 6px; border-radius: 5px; color: var(--blue); background: var(--blue-soft); font-size: 7px; font-weight: 800; }
+.strategy-signal-state[data-state="target-reached"] { color: var(--green); background: var(--green-soft); }
+.strategy-signal-state[data-state="stopped"] { color: var(--red); background: var(--red-soft); }
+.strategy-signal-state[data-state="paused"] { color: var(--amber); background: rgba(173, 101, 8, .1); }
 .placeholder { padding: 28px 10px; color: var(--subtle); font-size: 9px; line-height: 1.5; text-align: center; }
 .strategy-note { margin-top: auto !important; padding: 10px 13px; color: var(--subtle); font-size: 8px; line-height: 1.45; }
 

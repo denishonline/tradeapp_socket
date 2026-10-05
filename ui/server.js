@@ -1,6 +1,7 @@
 import dotenv from "dotenv"
 import express from "express"
 import { createServer } from "node:http"
+import { readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Server as SocketServer } from "socket.io"
@@ -13,15 +14,31 @@ import { createMarketFeed } from "./market-feed.js"
 import { createMarketHistory } from "./market-history.js"
 import { createMarketDepthHistory } from "./market-depth-history.js"
 import { createTradingRuntime } from "./trading/runtime.js"
+import { createDepthMomentumRadar } from "./depth-momentum.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDirectory = path.resolve(__dirname, "..")
+const databaseDirectory = path.join(rootDirectory, "db")
 const publicDirectory = path.join(__dirname, "public")
 const environment = process.env.NODE_ENV || "production"
 const envFile = environment === "production" ? ".env.production" : ".env"
 dotenv.config({ path: path.join(rootDirectory, envFile) })
 const port = Number(process.env.PORT) || 3000
 const host = process.env.HOST || "127.0.0.1"
+
+async function directorySize(directory) {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const sizes = await Promise.all(entries.map(async (entry) => {
+    const entryPath = path.join(directory, entry.name)
+    if (entry.isDirectory()) return directorySize(entryPath)
+    if (entry.isFile()) return (await stat(entryPath)).size
+    return 0
+  }))
+  return sizes.reduce((total, size) => total + size, 0)
+}
+
+let dbSizeBytes = await directorySize(databaseDirectory)
+let dbSizeUpdatedAt = new Date().toISOString()
 
 const stocks = await loadStocks(path.join(rootDirectory, "db", "stocks"))
 const history = await createMarketHistory({
@@ -44,9 +61,11 @@ const io = new SocketServer(httpServer, {
   serveClient: true,
   transports: ["websocket", "polling"],
 })
+const strategyRadar = createDepthMomentumRadar({ onUpdate: (signals) => io.emit("strategy:signals", signals) })
 const candleBuilder = createLiveCandleBuilder({
   store: candles,
   io,
+  onComplete: (symbol, candle) => strategyRadar.observeCandle(symbol, candle),
   onError: (symbol, error) => {
     candleCapture.error = `Candle storage error for ${symbol}: ${error.message}`
     emitControlStatus()
@@ -163,6 +182,7 @@ function controlStatus() {
       },
     },
     stocks: stocks.length,
+    database: { sizeBytes: dbSizeBytes, updatedAt: dbSizeUpdatedAt },
     orderMode: CONSTANT.flgPlaceOptionOrder
       ? "live-options"
       : CONSTANT.flgPlaceCashOrder
@@ -185,6 +205,7 @@ async function stopMarketEngine(message = "Market stream stopped") {
   engineStatus = state("stopping", "Stopping market streams and strategy...")
   emitControlStatus()
   candleBuilder.reset()
+  strategyRadar.resetLiveState()
   const currentFeed = feed
   const currentTrading = trading
   feed = null
@@ -194,7 +215,7 @@ async function stopMarketEngine(message = "Market stream stopped") {
   engineStatus = state("stopped", message)
   io.emit("stocks:snapshot", await stockSnapshot())
   io.emit("feed:status", engineStatus)
-  io.emit("strategy:rankings", { buy: [], sell: [] })
+  io.emit("strategy:signals", strategyRadar.snapshot())
   emitControlStatus()
 }
 
@@ -267,10 +288,6 @@ app.post("/api/control/start", async (_request, response) => {
     response.status(400).json({ ok: false, message: "Run AutoLogin before starting the market server." })
     return
   }
-  if (engineStatus.state === "armed") {
-    response.status(409).json({ ok: false, message: "Capture service is already running; live data is unavailable outside market hours.", status: controlStatus() })
-    return
-  }
   if (startPromise) {
     response.status(409).json({ ok: false, message: "Market server is already starting." })
     return
@@ -291,6 +308,7 @@ app.post("/api/control/start", async (_request, response) => {
   startPromise = (async () => {
     CONSTANT.access_token = accessToken()
     await depthHistory.prepareStocks(stocks)
+    await strategyRadar.seed(stocks, candles)
     const nextTrading = await createTradingRuntime({ rootDirectory, constants: CONSTANT, config: DEPTH_TREND, history })
     const nextFeed = createMarketFeed({
       io,
@@ -299,8 +317,9 @@ app.post("/api/control/start", async (_request, response) => {
       accessToken: CONSTANT.access_token,
       history,
       depthHistory,
-      onMarket: (kind, data, at) => {
+      onMarket: (kind, data, at, marketContext) => {
         nextTrading.observe(kind, data, at)
+        if (kind === "depth") strategyRadar.observeDepth(data, at, marketContext)
         if (kind === "price") {
           candleCapture.priceTicks++
           candleCapture.lastPriceAt = at instanceof Date ? at.toISOString() : new Date(at).toISOString()
@@ -309,6 +328,7 @@ app.post("/api/control/start", async (_request, response) => {
       },
       onGap: () => {
         nextTrading.reset()
+        strategyRadar.resetLiveState()
         candleBuilder.reset()
       },
       onReady: nextTrading.ready,
@@ -417,13 +437,22 @@ io.on("connection", (socket) => {
   socket.emit("feed:status", feed?.getStatus() || engineStatus)
   socket.emit("control:status", controlStatus())
   socket.emit("history:status", preloader.status())
-  socket.emit("strategy:rankings", trading?.rankings() || { buy: [], sell: [] })
+  socket.emit("strategy:signals", strategyRadar.snapshot())
 })
 
 const statusTimer = setInterval(() => {
   emitControlStatus()
-  io.emit("strategy:rankings", trading?.rankings() || { buy: [], sell: [] })
 }, 2000)
+
+const databaseSizeTimer = setInterval(async () => {
+  try {
+    dbSizeBytes = await directorySize(databaseDirectory)
+    dbSizeUpdatedAt = new Date().toISOString()
+    emitControlStatus()
+  } catch (error) {
+    console.error("Cannot calculate db/ folder size:", error.message)
+  }
+}, 60_000)
 
 httpServer.listen(port, host, () => {
   console.log(`Market dashboard: http://${host}:${port}`)
@@ -437,6 +466,7 @@ async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   clearInterval(statusTimer)
+  clearInterval(databaseSizeTimer)
   candleBuilder.close()
   const deadline = setTimeout(() => {
     console.error("Shutdown timed out; buffered market history may be incomplete.")
