@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const scanner = path.join(root, "scripts", "scan-short-depth-patterns.js")
-const rows = JSON.parse(execFileSync(process.execPath, [scanner, "--json"], { cwd: root, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }))
+const rows = JSON.parse(execFileSync(process.execPath, [scanner, "--json", ...process.argv.slice(2)], { cwd: root, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }))
 const winners = rows.filter((row) => row.outcome === "TARGET first")
 const featureNames = [
   "breakoutPct", "volumeX", "closeLocation", "depthFull", "depthTop2",

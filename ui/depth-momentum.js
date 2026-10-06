@@ -31,6 +31,7 @@ export const DEPTH_CONTINUATION_SHORT_RULE = Object.freeze({
   minimumCloseLocation: 0.3,
 })
 
+// Calibrated on the 2026-10-05 archive; later sessions need independent review.
 export const DEPTH_SHORT_BREAKDOWN_RULE = Object.freeze({
   lookbackCandles: 10,
   breakoutCandles: 5,
@@ -41,9 +42,18 @@ export const DEPTH_SHORT_BREAKDOWN_RULE = Object.freeze({
   sellTop2Imbalance: 0.3,
   bidDepthImbalance: 0.15,
   bidTop2Imbalance: 0.3,
-  minimumBreakdownPct: 0.05,
+  minimumBreakdownPct: 0.07,
   maximumBreakdownPct: 0.15,
   cooldownMinutes: 10,
+  latestSignalMinuteIst: 12 * 60,
+  maximumMarketBelowSma20: 0.8,
+  minimumMarketCoverage: 0.75,
+  maximumSma20GapPct: -0.2,
+  minimumRsi14: 20,
+  maximumOfi3: -0.1,
+  minimumOfi5: -0.12,
+  maximumOfi5: -0.07,
+  maximumOfi10: -0.02,
 })
 
 export const DEPTH_LONG_ABSORPTION_RULE = Object.freeze({
@@ -125,6 +135,67 @@ export function evaluateStrictLongAbsorption(current, previousCandles, depthWind
 }
 
 const MAX_SESSION_CANDLES = 390
+
+// Use the preceding completed minute for every stock, so candle arrival order
+// within the signal minute cannot change the breadth result.
+export function marketBreadthBelowSma20(candlesByStock, candleTime, universeSize = candlesByStock.size) {
+  let observed = 0
+  let below = 0
+  const previousMinuteTime = candleTime - 60
+  for (const rows of candlesByStock.values()) {
+    const index = rows.findIndex((row) => row.time === previousMinuteTime)
+    if (index < 20) continue
+    const previous20 = rows.slice(index - 20, index)
+    if (previous20.some((row, offset) => row.time !== previousMinuteTime - (20 - offset) * 60)) continue
+    const average = previous20.reduce((sum, row) => sum + row.close, 0) / 20
+    if (!Number.isFinite(average) || average <= 0) continue
+    observed++
+    if (rows[index].close < average) below++
+  }
+  if (observed < Math.ceil(universeSize * DEPTH_SHORT_BREAKDOWN_RULE.minimumMarketCoverage)) return null
+  return below / observed
+}
+
+function confirmShortBreakdown(current, history, minuteBuckets, currentMinute, breadth) {
+  const rule = DEPTH_SHORT_BREAKDOWN_RULE
+  const ist = new Date(current.time * 1000 + 330 * 60_000)
+  if (ist.getUTCHours() * 60 + ist.getUTCMinutes() >= rule.latestSignalMinuteIst) return false
+  const last20 = history.slice(-19)
+  const smaRows = [...last20, current]
+  if (smaRows.length !== 20 || smaRows.some((row, index) =>
+    row.time !== current.time - (19 - index) * 60)) return false
+  const sma20 = smaRows.reduce((sum, row) => sum + row.close, 0) / 20
+  if ((current.close / sma20 - 1) * 100 > rule.maximumSma20GapPct) return false
+
+  const last15 = [...history.slice(-14), current]
+  if (last15.length !== 15 || last15.some((row, index) =>
+    row.time !== current.time - (14 - index) * 60)) return false
+  let gains = 0
+  let losses = 0
+  for (let index = 1; index < last15.length; index++) {
+    const change = last15[index].close - last15[index - 1].close
+    gains += Math.max(change, 0)
+    losses += Math.max(-change, 0)
+  }
+  const rsi14 = losses === 0 ? 100 : 100 - 100 / (1 + gains / losses)
+  if (rsi14 < rule.minimumRsi14) return false
+
+  const flows = new Map()
+  for (const period of [3, 5, 10]) {
+    let ofi = 0
+    let depth = 0
+    for (let offset = 0; offset < period; offset++) {
+      const bucket = minuteBuckets?.get(currentMinute - offset)
+      if (!bucket) return false
+      ofi += bucket.ofi
+      depth += bucket.ofiDepth
+    }
+    flows.set(period, ofi / (depth || 1))
+  }
+  if (flows.get(3) > rule.maximumOfi3 || flows.get(5) < rule.minimumOfi5 ||
+      flows.get(5) > rule.maximumOfi5 || flows.get(10) > rule.maximumOfi10) return false
+  return Number.isFinite(breadth) && breadth <= rule.maximumMarketBelowSma20
+}
 
 function evaluateRule(current, previousCandles, depthWindow, rule) {
   if (previousCandles.length !== rule.lookbackCandles || depthWindow.length !== rule.depthMinutes) return null
@@ -359,17 +430,32 @@ function indiaDate(timestamp) {
   return new Date(timestamp + 330 * 60_000).toISOString().slice(0, 10)
 }
 
-export function createDepthMomentumRadar({ onUpdate = () => {}, now = () => Date.now() } = {}) {
+export function createDepthMomentumRadar({ onUpdate = () => {}, onSignal = () => {}, initialSignals = [],
+  marketBreadthAtMinute = null, now = () => Date.now() } = {}) {
   const candlesByStock = new Map()
   const bookFieldsByStock = new Map()
   const minuteDepthByStock = new Map()
   const activeByStrategyStock = new Map()
   const lastSignalMinuteByStrategyStock = new Map()
-  const signals = []
+  const signals = initialSignals.slice(0, DEPTH_MOMENTUM_RULE.maximumSignals).reverse()
   let sessionDate = indiaDate(now())
+  let universeSize = 0
+  let restoredActive = false
+  for (const signal of signals) {
+    const strategyKey = String(signal.id || "").split(":").at(-1)
+    const minute = Math.floor(Number(signal.candleMinute) / 60)
+    if (strategyKey && signal.symbol && Number.isFinite(minute)) {
+      const stateKey = `${strategyKey}:${signal.symbol}`
+      lastSignalMinuteByStrategyStock.set(stateKey, Math.max(lastSignalMinuteByStrategyStock.get(stateKey) ?? -Infinity, minute))
+    }
+    if (signal.status === "Active") {
+      signal.status = "Paused"
+      restoredActive = true
+    }
+  }
 
   function publish() {
-    onUpdate(snapshot())
+    onUpdate(snapshot(), sessionDate)
   }
 
   function snapshot() {
@@ -389,14 +475,15 @@ export function createDepthMomentumRadar({ onUpdate = () => {}, now = () => Date
   }
 
   async function seed(stocks, candleStore) {
+    universeSize = stocks.length
     const today = indiaDate(now())
     if (today !== sessionDate) {
+      sessionDate = today
       signals.length = 0
       candlesByStock.clear()
       lastSignalMinuteByStrategyStock.clear()
       publish()
     }
-    sessionDate = today
     resetLiveState()
     await Promise.all(stocks.map(async (symbol) => {
       try {
@@ -443,12 +530,13 @@ export function createDepthMomentumRadar({ onUpdate = () => {}, now = () => Date
     const minute = Math.floor((Number.isFinite(marketTime) ? marketTime : timestamp) / 60_000)
     const stockMinutes = minuteDepthByStock.get(symbol) || new Map()
     const bucket = stockMinutes.get(minute) || { minute, count: 0, imbalance: 0, nearImbalance: 0,
-      orderImbalance: 0, bestLevelImbalance: 0, askAbsorptionCount: 0, ofi: 0, ofiDepth: 0 }
+      orderImbalance: 0, bestLevelImbalance: 0, spreadPct: 0, askAbsorptionCount: 0, ofi: 0, ofiDepth: 0 }
     bucket.count++
     bucket.imbalance += metrics.imbalance
     bucket.nearImbalance += metrics.nearImbalance
     bucket.orderImbalance += metrics.orderImbalance
     bucket.bestLevelImbalance += metrics.bestLevelImbalance
+    bucket.spreadPct += (metrics.bestAsk / metrics.bestBid - 1) * 100
     bucket.ofi += ofi
     bucket.ofiDepth += ofiDepth
     if (metrics.imbalance <= DEPTH_LONG_ABSORPTION_RULE.maximumSupportedDepthImbalance &&
@@ -460,9 +548,10 @@ export function createDepthMomentumRadar({ onUpdate = () => {}, now = () => Date
         row.averageNearImbalance = row.nearImbalance / row.count
         row.averageOrderImbalance = row.orderImbalance / row.count
         row.averageBestLevelImbalance = row.bestLevelImbalance / row.count
+        row.averageSpreadPct = row.spreadPct / row.count
       }
     }
-    for (const key of stockMinutes.keys()) if (key < minute - 4) stockMinutes.delete(key)
+    for (const key of stockMinutes.keys()) if (key < minute - 12) stockMinutes.delete(key)
     minuteDepthByStock.set(symbol, stockMinutes)
   }
 
@@ -527,6 +616,12 @@ export function createDepthMomentumRadar({ onUpdate = () => {}, now = () => Date
       const historyWindow = history.slice(-strategy.rule.lookbackCandles)
       const features = strategy.evaluate(current, historyWindow, depthWindow)
       if (!features) continue
+      if (strategy.key === "short-breakdown") {
+        const breadth = marketBreadthAtMinute
+          ? marketBreadthAtMinute(current.time)
+          : marketBreadthBelowSma20(candlesByStock, current.time, universeSize || candlesByStock.size)
+        if (!confirmShortBreakdown(current, history, minuteBuckets, currentMinute, breadth)) continue
+      }
       const lastSignalMinute = lastSignalMinuteByStrategyStock.get(stateKey) ?? -Infinity
       if (currentMinute - lastSignalMinute < strategy.rule.cooldownMinutes) continue
 
@@ -554,11 +649,13 @@ export function createDepthMomentumRadar({ onUpdate = () => {}, now = () => Date
       if (signals.length > DEPTH_MOMENTUM_RULE.maximumSignals) signals.shift()
       activeByStrategyStock.set(stateKey, signal)
       lastSignalMinuteByStrategyStock.set(stateKey, currentMinute)
+      onSignal(signal, { current, history, minuteBuckets, currentMinute })
       addedSignal = true
     }
 
     if (addedSignal) publish()
   }
 
+  if (restoredActive) publish()
   return { observeDepth, observeCandle, seed, snapshot, resetLiveState }
 }

@@ -13,8 +13,10 @@ import { loadStocks } from "./market-data.js"
 import { createMarketFeed } from "./market-feed.js"
 import { createMarketHistory } from "./market-history.js"
 import { createMarketDepthHistory } from "./market-depth-history.js"
+import { marketDepthSession } from "./market-depth.js"
 import { createTradingRuntime } from "./trading/runtime.js"
 import { createDepthMomentumRadar } from "./depth-momentum.js"
+import { createStrategySignalStore } from "./strategy-signal-store.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDirectory = path.resolve(__dirname, "..")
@@ -61,7 +63,15 @@ const io = new SocketServer(httpServer, {
   serveClient: true,
   transports: ["websocket", "polling"],
 })
-const strategyRadar = createDepthMomentumRadar({ onUpdate: (signals) => io.emit("strategy:signals", signals) })
+const signalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals"))
+const strategyRadar = createDepthMomentumRadar({
+  initialSignals: signalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { signalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save Strategy Radar signals:", error.message) }
+    io.emit("strategy:signals", signals)
+  },
+})
 const candleBuilder = createLiveCandleBuilder({
   store: candles,
   io,

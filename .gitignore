@@ -10,6 +10,7 @@ db/candles/
 db/trend-orders/
 db/option-depth/
 db/cash-depth/
+db/strategy-signals/
 
 *.log
 .DS_Store

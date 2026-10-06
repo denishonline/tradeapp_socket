@@ -11,6 +11,7 @@ export async function createMarketDepthHistory({
 }) {
   const files = new Map()
   const preparing = new Map()
+  const knownStocks = new Map()
   let queue = new Map()
   let bufferedBytes = 0
   let writing = null
@@ -83,8 +84,11 @@ export async function createMarketDepthHistory({
 
   async function prepareStocks(stocks) {
     try {
-      const date = marketDepthSession(new Date()).date
-      await Promise.all(stocks.map((stock) => prepareStock(stock, date)))
+      knownStocks.clear()
+      for (const stock of stocks) {
+        if (!/^[A-Z0-9&._-]+$/i.test(stock)) throw new TypeError("Unsafe stock symbol in depth history")
+        knownStocks.set(`NSE:${stock}-EQ`, stock)
+      }
     } catch (error) {
       fail(error)
       throw error
@@ -98,8 +102,17 @@ export async function createMarketDepthHistory({
     }
     const date = marketDepthSession(receivedAt).date
     const key = fileKey(contract?.symbol, date)
-    const file = files.get(key)
-    if (!file) {
+    if (!files.has(key)) {
+      const stock = knownStocks.get(contract?.symbol)
+      if (!stock) {
+        rejectedRecords++
+        return false
+      }
+      // A feed can remain connected across an IST date change. Prepare the new
+      // date's file while keeping this update in the queue; flush waits for it.
+      void prepareStock(stock, date).catch(fail)
+    }
+    if (!files.has(key) && !preparing.has(key)) {
       rejectedRecords++
       return false
     }
