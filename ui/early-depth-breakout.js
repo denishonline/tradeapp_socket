@@ -3,6 +3,7 @@ import { toStockName } from "./market-data.js"
 
 const MINUTE = 60_000
 const MAX_CANDLES = 180
+const SEED_CANDLES = 500
 const EVALUATION_DELAY_MS = 5_000
 const TARGET_PCT = 3
 const STOP_PCT = 0.5
@@ -43,6 +44,7 @@ function bookMetrics(fields) {
 
 export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals = [], now = () => Date.now() } = {}) {
   const candlesByStock = new Map()
+  const dayOpenByStock = new Map()
   const depthByStock = new Map()
   const bookStateByStock = new Map()
   const evaluatedMinuteByStock = new Map()
@@ -62,6 +64,7 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
   function resetDay(date) {
     sessionDate = date
     candlesByStock.clear()
+    dayOpenByStock.clear()
     depthByStock.clear()
     bookStateByStock.clear()
     evaluatedMinuteByStock.clear()
@@ -77,10 +80,13 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     const completedBefore = Math.floor(now() / MINUTE) * MINUTE
     await Promise.all(stocks.map(async (symbol) => {
       try {
-        const rows = await candleStore.read(symbol, { limit: MAX_CANDLES })
-        candlesByStock.set(symbol, rows.map(normalizeCandle).filter((row) => row &&
+        const rows = await candleStore.read(symbol, { limit: SEED_CANDLES })
+        const normalized = rows.map(normalizeCandle).filter((row) => row &&
           indiaDate(row.time * 1000) === sessionDate && row.time * 1000 + MINUTE <= completedBefore)
-          .slice(-MAX_CANDLES))
+        const sessionOpenTime = Date.parse(`${sessionDate}T09:15:00+05:30`) / 1000
+        const openingCandle = normalized.find((row) => row.time === sessionOpenTime)
+        if (openingCandle) dayOpenByStock.set(symbol, openingCandle.open)
+        candlesByStock.set(symbol, normalized.slice(-MAX_CANDLES))
       } catch { candlesByStock.set(symbol, []) }
     }))
   }
@@ -91,6 +97,8 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     const date = indiaDate(candle.time * 1000)
     if (date < sessionDate) return
     if (date > sessionDate) resetDay(date)
+    const sessionOpenTime = Date.parse(`${sessionDate}T09:15:00+05:30`) / 1000
+    if (candle.time === sessionOpenTime) dayOpenByStock.set(symbol, candle.open)
     const rows = candlesByStock.get(symbol) || []
     const existing = rows.findIndex((row) => row.time === candle.time)
     if (existing >= 0) rows[existing] = candle
@@ -163,11 +171,15 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     const previous10 = last15.slice(0, 10)
     const recent5 = last15.slice(-5)
     const return5Pct = pct(last.close, recent5[0].open)
+    const dayOpen = dayOpenByStock.get(symbol)
+    if (!Number.isFinite(dayOpen) || dayOpen <= 0) return
+    const dayPctFromOpen = pct(last.close, dayOpen)
     const priorVolume = mean(previous10, "volume")
     const volumeMultiple = mean(recent5, "volume") / (priorVolume || 1)
     const elevatedVolumeBars = recent5.filter((row) => row.volume >= priorVolume).length
     const breakoutPct = pct(last.close, Math.max(...previous10.map((row) => row.high)))
-    if (return5Pct < 0.5 || volumeMultiple < 1.5 || elevatedVolumeBars < 2 || breakoutPct <= 0) return
+    if (dayPctFromOpen <= 0 || return5Pct < 0.5 || volumeMultiple < 1.5 ||
+        elevatedVolumeBars < 2 || breakoutPct <= 0) return
     const buckets = depthByStock.get(symbol)
     if (!buckets) return
     const books = []
@@ -206,7 +218,7 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
       target: entry * (1 + TARGET_PCT / 100),
       status: "Active",
       candleMinute: last.time,
-      metrics: { return5Pct, volumeMultiple, elevatedVolumeBars, breakoutPct,
+      metrics: { dayPctFromOpen, return5Pct, volumeMultiple, elevatedVolumeBars, breakoutPct,
         fullImbalance2: full2, top2Imbalance2: top2_2,
         fullAcceleration: full2 - prior3Full, top2Acceleration: top2_2 - prior3Top2,
         currentQuoteFlow: currentFlow, normalizedQuoteFlow2: flow2,

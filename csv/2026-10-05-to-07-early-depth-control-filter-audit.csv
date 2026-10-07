@@ -1,0 +1,8 @@
+date,symbol,signal_ist,day_pct_from_open,original_outcome,new_filter_result,rejection_reason
+2026-10-05,PATANJALI,11:54:00,-0.5618,Stopped,Rejected,day_pct_from_open <= 0%
+2026-10-05,KPITTECH,13:41:00,-0.9203,Stopped,Rejected,day_pct_from_open <= 0%
+2026-10-05,TATASTEEL,13:41:00,-0.2622,Stopped,Rejected,day_pct_from_open <= 0%
+2026-10-06,TIINDIA,09:57:00,1.1077,Target reached,Passed,
+2026-10-06,ASTRAL,12:59:00,2.4279,Unresolved,Passed,
+2026-10-07,UNITDSPR,11:17:00,-0.1558,Unresolved,Rejected,day_pct_from_open <= 0%
+2026-10-07,TIINDIA,14:28:00,-2.8053,Stopped,Rejected,day_pct_from_open <= 0%
