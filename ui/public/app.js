@@ -302,7 +302,7 @@ function upsertCandle(candle) {
 
 function renderStrategySignals(signals) {
   if (!signals.length) {
-    elements.strategySignalGroups.innerHTML = `<p class="placeholder">Waiting for candle and depth conditions…</p>`
+    elements.strategySignalGroups.innerHTML = `<p class="placeholder">Waiting for candle and depth confirmation…</p>`
     return
   }
   const groups = new Map()

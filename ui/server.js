@@ -15,7 +15,9 @@ import { createMarketHistory } from "./market-history.js"
 import { createMarketDepthHistory } from "./market-depth-history.js"
 import { marketDepthSession } from "./market-depth.js"
 import { createTradingRuntime } from "./trading/runtime.js"
-import { createDepthMomentumRadar } from "./depth-momentum.js"
+import { createPersistentBidBreakout } from "./persistent-bid-breakout.js"
+import { createEarlyDepthBreakout } from "./early-depth-breakout.js"
+import { createBidSupportBreakout } from "./bid-support-breakout.js"
 import { createStrategySignalStore } from "./strategy-signal-store.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -63,19 +65,50 @@ const io = new SocketServer(httpServer, {
   serveClient: true,
   transports: ["websocket", "polling"],
 })
-const signalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals"))
-const strategyRadar = createDepthMomentumRadar({
+const signalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "persistent-bid-breakout"))
+const earlySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "early-depth-breakout"))
+const bidSupportSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "bid-support-breakout"))
+let earlyRadar
+let bidSupportRadar
+function radarSnapshot() {
+  return [...strategyRadar.snapshot(), ...earlyRadar.snapshot(), ...bidSupportRadar.snapshot()]
+    .sort((left, right) => Date.parse(right.time) - Date.parse(left.time))
+}
+function emitRadarSignals() {
+  io.emit("strategy:signals", radarSnapshot())
+}
+const strategyRadar = createPersistentBidBreakout({
   initialSignals: signalStore.read(marketDepthSession().date),
   onUpdate: (signals, date) => {
     try { signalStore.save(date, signals) }
     catch (error) { console.error("Cannot save Strategy Radar signals:", error.message) }
-    io.emit("strategy:signals", signals)
+    emitRadarSignals()
+  },
+})
+earlyRadar = createEarlyDepthBreakout({
+  initialSignals: earlySignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { earlySignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save early breakout signals:", error.message) }
+    emitRadarSignals()
+  },
+})
+bidSupportRadar = createBidSupportBreakout({
+  initialSignals: bidSupportSignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { bidSupportSignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save bid support breakout signals:", error.message) }
+    emitRadarSignals()
   },
 })
 const candleBuilder = createLiveCandleBuilder({
   store: candles,
   io,
-  onComplete: (symbol, candle) => strategyRadar.observeCandle(symbol, candle),
+  onComplete: (symbol, candle) => {
+    strategyRadar.observeCandle(symbol, candle)
+    earlyRadar.observeCandle(symbol, candle)
+    bidSupportRadar.observeCandle(symbol, candle)
+  },
   onError: (symbol, error) => {
     candleCapture.error = `Candle storage error for ${symbol}: ${error.message}`
     emitControlStatus()
@@ -216,6 +249,8 @@ async function stopMarketEngine(message = "Market stream stopped") {
   emitControlStatus()
   candleBuilder.reset()
   strategyRadar.resetLiveState()
+  earlyRadar.resetLiveState()
+  bidSupportRadar.resetLiveState()
   const currentFeed = feed
   const currentTrading = trading
   feed = null
@@ -225,7 +260,6 @@ async function stopMarketEngine(message = "Market stream stopped") {
   engineStatus = state("stopped", message)
   io.emit("stocks:snapshot", await stockSnapshot())
   io.emit("feed:status", engineStatus)
-  io.emit("strategy:signals", strategyRadar.snapshot())
   emitControlStatus()
 }
 
@@ -319,6 +353,8 @@ app.post("/api/control/start", async (_request, response) => {
     CONSTANT.access_token = accessToken()
     await depthHistory.prepareStocks(stocks)
     await strategyRadar.seed(stocks, candles)
+    await earlyRadar.seed(stocks, candles)
+    await bidSupportRadar.seed(stocks, candles)
     const nextTrading = await createTradingRuntime({ rootDirectory, constants: CONSTANT, config: DEPTH_TREND, history })
     const nextFeed = createMarketFeed({
       io,
@@ -329,7 +365,11 @@ app.post("/api/control/start", async (_request, response) => {
       depthHistory,
       onMarket: (kind, data, at, marketContext) => {
         nextTrading.observe(kind, data, at)
-        if (kind === "depth") strategyRadar.observeDepth(data, at, marketContext)
+        if (kind === "depth") {
+          strategyRadar.observeDepth(data, at, marketContext)
+          earlyRadar.observeDepth(data, at)
+          bidSupportRadar.observeDepth(data, at, marketContext)
+        }
         if (kind === "price") {
           candleCapture.priceTicks++
           candleCapture.lastPriceAt = at instanceof Date ? at.toISOString() : new Date(at).toISOString()
@@ -339,6 +379,8 @@ app.post("/api/control/start", async (_request, response) => {
       onGap: () => {
         nextTrading.reset()
         strategyRadar.resetLiveState()
+        earlyRadar.resetLiveState()
+        bidSupportRadar.resetLiveState()
         candleBuilder.reset()
       },
       onReady: nextTrading.ready,
@@ -447,8 +489,12 @@ io.on("connection", (socket) => {
   socket.emit("feed:status", feed?.getStatus() || engineStatus)
   socket.emit("control:status", controlStatus())
   socket.emit("history:status", preloader.status())
-  socket.emit("strategy:signals", strategyRadar.snapshot())
+  socket.emit("strategy:signals", radarSnapshot())
 })
+
+const earlyRadarTimer = setInterval(() => {
+  if (feed) earlyRadar.flushCompleted(Date.now())
+}, 1000)
 
 const statusTimer = setInterval(() => {
   emitControlStatus()
@@ -475,6 +521,7 @@ let shuttingDown = false
 async function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
+  clearInterval(earlyRadarTimer)
   clearInterval(statusTimer)
   clearInterval(databaseSizeTimer)
   candleBuilder.close()

@@ -10,6 +10,7 @@
     "test": "node --test",
     "replay:trend": "node scripts/replay-depth-trend.js",
     "scan:depth": "node scripts/scan-depth-behavior.js",
+    "scan:depth:bid-support": "node scripts/scan-bid-support-breakout-day.js",
     "scan:depth:signals": "node scripts/find-sell-heavy-rise-signals.js",
     "analyze:depth-followthrough": "node scripts/analyze-depth-signal-followthrough.js",
     "discover:depth-leads": "node scripts/discover-cash-depth-leads.js",
