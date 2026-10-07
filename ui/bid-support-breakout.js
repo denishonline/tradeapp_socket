@@ -27,11 +27,15 @@ function setup(candles, index) {
   const baseLow = Math.min(...base.map((row) => row.low))
   const breakoutHigh = Math.max(...last10.map((row) => row.high))
   const trendPct = pct(base.at(-1).close, last10[0].open)
+  const return3Pct = pct(base.at(-1).close, base[0].open)
   const baseRangePct = pct(baseHigh, baseLow)
   const volumeRatio = average(base.slice(-2), "volume") / average(last10.slice(-8, -3), "volume")
-  if (trendPct < 0.6 || trendPct > 4 || baseRangePct > 0.6 ||
-      volumeRatio < 0.15 || volumeRatio > 0.85 || baseHigh < breakoutHigh * 0.997) return null
-  return { trendPct, baseRangePct, volumeRatio, baseHigh, baseLow, breakoutHigh,
+  const volume5Ratio = average(last10.slice(-5), "volume") / average(last10.slice(0, 5), "volume")
+  if (trendPct < 0.6 || trendPct > 4 || return3Pct < -0.04 || baseRangePct > 0.6 ||
+      volumeRatio < 0.15 || volumeRatio > 0.85 || volume5Ratio > 0.95 ||
+      baseHigh < breakoutHigh * 0.997) return null
+  return { trendPct, return3Pct, baseRangePct, volumeRatio, volume5Ratio,
+    baseHigh, baseLow, breakoutHigh,
     baseVolume: average(base, "volume"), candleAt: base.at(-1).at }
 }
 
@@ -189,7 +193,7 @@ export function createBidSupportBreakout({ onUpdate = () => {}, initialSignals =
     const volumePace = ((volume - state.baselineVolume) * MINUTE / (at - depthMinute)) / candidate.baseVolume
     const spreadPct = pct(book.ask, book.bid)
     const extensionPct = pct(book.ask, candidate.breakoutHigh)
-    if (flow <= 0.1 || volumePace < 1.5 || spreadPct > 0.15 || extensionPct > 0.3) return
+    if (flow <= 0.1 || volumePace < 1.9 || spreadPct > 0.15 || extensionPct > 0.3) return
     const support = []
     for (let offset = 3; offset >= 1; offset--) {
       const minuteAt = depthMinute - offset * MINUTE
@@ -210,7 +214,8 @@ export function createBidSupportBreakout({ onUpdate = () => {}, initialSignals =
       target: book.ask * (1 + TARGET_PCT / 100),
       stop: book.ask * (1 - STOP_PCT / 100), status: "Active",
       candleMinute: candidate.candleAt / 1000,
-      metrics: { trendPct: candidate.trendPct, baseRangePct: candidate.baseRangePct,
+      metrics: { trendPct: candidate.trendPct, return3Pct: candidate.return3Pct,
+        baseRangePct: candidate.baseRangePct, volume5Ratio: candidate.volume5Ratio,
         volumeRatio: candidate.volumeRatio, breakoutHigh: candidate.breakoutHigh,
         baseLow: candidate.baseLow, supportAt: new Date(strongest.minuteAt).toISOString(),
         supportFull: strongest.full, supportPositivePct: strongest.positivePct,

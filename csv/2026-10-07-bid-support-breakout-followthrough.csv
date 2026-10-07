@@ -1,0 +1,5 @@
+symbol,ticks,post5_full_bid_share,post5_top2_bid_share,post5_flow,post5_bid_move_pct,post5_close_pct,post5_high_pct,post5_low_pct
+"INDIGO",410,42.3,41.3,-0.03,0.217,0.2,0.43,-0.03
+"HAVELLS",77,59,57.8,-0.033,0.019,-0.01,0.17,-0.05
+"BDL",91,60.9,55.4,-0.043,-0.193,-0.31,0.01,-0.31
+"UNIONBANK",498,60.9,60.5,-0.019,-0.618,-0.65,-0.1,-0.76

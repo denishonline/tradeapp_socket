@@ -1,0 +1,13 @@
+date,symbol,signal_ist,return3_pct,volume5_ratio,live_volume_pace,pass_return3,pass_volume_compression,pass_live_volume,passes_filter,original_outcome,rejection_reason
+2026-10-05,BANKINDIA,10:15:31,0.007,0.715,7.924,true,true,true,true,Target first,
+2026-10-05,MPHASIS,12:02:15,0.326,0.622,2.206,true,true,true,true,Target first,
+2026-10-05,ADANIENT,13:44:51,0.150,1.489,1.533,true,false,false,false,Stop first,"No 5-minute volume compression; weak live volume pace"
+2026-10-05,TATAELXSI,13:45:32,-0.122,1.123,13.724,false,false,true,false,Stop first,"Negative 3-minute momentum; no 5-minute volume compression"
+2026-10-06,BHEL,09:27:29,-0.035,0.679,1.936,true,true,true,true,Target first,
+2026-10-06,PGEL,09:58:24,0.080,0.587,11.499,true,true,true,true,Target first,
+2026-10-06,PIDILITIND,10:27:42,0.249,0.946,2.274,true,true,true,true,Target first,
+2026-10-06,NAUKRI,11:43:15,0.016,0.308,6.127,true,true,true,true,Target first,
+2026-10-07,INDIGO,09:28:58,0.180,0.732,1.639,true,true,false,false,Stop first,Weak live volume pace
+2026-10-07,HAVELLS,09:29:41,0.190,0.229,10.957,true,true,true,true,Target first,
+2026-10-07,BDL,10:27:21,-0.046,0.885,5.070,false,true,true,false,Stop first,Negative 3-minute momentum
+2026-10-07,UNIONBANK,14:33:21,-0.069,1.924,2.280,false,false,true,false,Stop first,"Negative 3-minute momentum; no 5-minute volume compression"

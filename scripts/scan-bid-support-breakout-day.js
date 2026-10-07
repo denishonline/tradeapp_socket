@@ -11,6 +11,9 @@ const broad = argumentsList.includes("--broad")
 const minimumTrendPct = broad ? 0.5 : 0.6
 const minimumVolumeRatio = broad ? 0 : 0.15
 const minimumSupportImbalance = broad ? 0.25 : 0.4
+const minimumLiveVolumePace = broad ? 1.5 : 1.9
+const minimumReturn3Pct = broad ? -Infinity : -0.04
+const maximumVolume5Ratio = broad ? Infinity : 0.95
 if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Pass a date as YYYY-MM-DD")
 const root = process.cwd()
 const depthRoot = path.join(root, "db", "cash-depth", date)
@@ -49,12 +52,15 @@ function setup(candles, index) {
   const baseLow = Math.min(...base.map((row) => row.low))
   const breakoutHigh = Math.max(...last10.map((row) => row.high))
   const trendPct = pct(base.at(-1).close, last10[0].open)
+  const return3Pct = pct(base.at(-1).close, base[0].open)
   const baseRangePct = pct(baseHigh, baseLow)
   const volumeRatio = average(base.slice(-2), "volume") / average(last10.slice(-8, -3), "volume")
-  if (trendPct < minimumTrendPct || trendPct > 4 || baseRangePct > 0.6 ||
+  const volume5Ratio = average(last10.slice(-5), "volume") / average(last10.slice(0, 5), "volume")
+  if (trendPct < minimumTrendPct || trendPct > 4 || return3Pct < minimumReturn3Pct || baseRangePct > 0.6 ||
       volumeRatio > 0.85 || volumeRatio < minimumVolumeRatio ||
+      volume5Ratio > maximumVolume5Ratio ||
       baseHigh < breakoutHigh * 0.997) return null
-  return { trendPct, baseRangePct, volumeRatio, baseHigh, baseLow,
+  return { trendPct, return3Pct, baseRangePct, volumeRatio, volume5Ratio, baseHigh, baseLow,
     breakoutHigh, baseVolume: average(base, "volume"), candleAt: base.at(-1).at }
 }
 
@@ -140,7 +146,7 @@ async function scanStock(symbol) {
     const volumePace = ((volume - baselineVolume) * minute / (at - depthMinute)) / cachedSetup.baseVolume
     const spreadPct = pct(book.ask, book.bid)
     const extensionPct = pct(book.ask, cachedSetup.breakoutHigh)
-    if (flow <= 0.1 || volumePace < 1.5 || spreadPct > 0.15 || extensionPct > 0.3) continue
+    if (flow <= 0.1 || volumePace < minimumLiveVolumePace || spreadPct > 0.15 || extensionPct > 0.3) continue
     const support = []
     for (let offset = 3; offset >= 1; offset--) {
       const minuteAt = depthMinute - offset * minute
@@ -155,7 +161,9 @@ async function scanStock(symbol) {
     signals.push({ symbol, signalAt: new Date(at).toISOString(), ist: fmt(at), entryAsk: round(book.ask, 2),
       breakoutHigh: cachedSetup.breakoutHigh, supportAt: fmt(strongest.minuteAt).slice(0, 5),
       supportFull: round(strongest.full), trendPct: round(cachedSetup.trendPct),
+      return3Pct: round(cachedSetup.return3Pct),
       baseRangePct: round(cachedSetup.baseRangePct), volumeRatio: round(cachedSetup.volumeRatio),
+      volume5Ratio: round(cachedSetup.volume5Ratio),
       liveFlow: round(flow), liveVolumePace: round(volumePace), spreadPct: round(spreadPct),
       extensionPct: round(extensionPct) })
     lastSignalAt = at
@@ -173,13 +181,13 @@ function followThrough(signal) {
     const at = Number(candle.time) * 1000
     if (at >= after && at < sessionEnd) bars.set(at, candle)
   }
-  let high = -Infinity, result1_5 = "Unresolved", result3 = "Unresolved"
+  let high = -Infinity, result1 = "Unresolved", result3 = "Unresolved"
   for (const [at, candle] of [...bars].sort(([left], [right]) => left - right)) {
     high = Math.max(high, Number(candle.high))
     const stop = Number(candle.low) <= signal.entryAsk * 0.995
-    if (result1_5 === "Unresolved") {
-      if (stop) result1_5 = `Stopped ${fmt(at).slice(0, 5)}`
-      else if (Number(candle.high) >= signal.entryAsk * 1.015) result1_5 = `+1.5% ${fmt(at).slice(0, 5)}`
+    if (result1 === "Unresolved") {
+      if (stop) result1 = `Stopped ${fmt(at).slice(0, 5)}`
+      else if (Number(candle.high) >= signal.entryAsk * 1.01) result1 = `+1% ${fmt(at).slice(0, 5)}`
     }
     if (result3 === "Unresolved") {
       if (stop) result3 = `Stopped ${fmt(at).slice(0, 5)}`
@@ -187,7 +195,7 @@ function followThrough(signal) {
     }
   }
   return { bestLaterPct: Number.isFinite(high) ? round(pct(high, signal.entryAsk), 2) : null,
-    result1_5, result3, lastCandleAt: bars.size ? Math.max(...bars.keys()) : null }
+    result1, result3, lastCandleAt: bars.size ? Math.max(...bars.keys()) : null }
 }
 
 const symbols = fs.readdirSync(depthRoot, { withFileTypes: true })
@@ -207,13 +215,13 @@ console.log(`${date}: ${symbols.length} stocks, ${completeCandleStocks} with 10+
 console.log(`Latest recorded depth: ${lastTickAt ? `${new Date(lastTickAt).toISOString()} (${fmt(lastTickAt)} IST)` : "none"}`)
 console.log(`Latest post-signal candle: ${scored.length ? fmt(Math.max(...scored.map((row) => row.lastCandleAt || 0))) : "none"} IST`)
 console.log(`${signals.length} chronological BUY signals (${broad ? "broad baseline" : "filtered"}); 30-minute cooldown per stock`)
-console.log("Follow-through uses candles after the signal minute: +1.5%/+3% targets, -0.5% stop, stop first if both touch in one candle")
+console.log("Follow-through uses candles after the signal minute: +1%/+3% targets, -0.5% stop, stop first if both touch in one candle")
 console.table(scored.map(({ symbol, ist, entryAsk, breakoutHigh, supportAt, supportFull,
-  trendPct, baseRangePct, volumeRatio, liveFlow, liveVolumePace, bestLaterPct, result1_5, result3 }) =>
+  trendPct, return3Pct, baseRangePct, volumeRatio, volume5Ratio, liveFlow, liveVolumePace, bestLaterPct, result1, result3 }) =>
   ({ symbol, ist, entryAsk, breakoutHigh, supportAt, supportFull, trendPct,
-    baseRangePct, volumeRatio, liveFlow, liveVolumePace, bestLaterPct, result1_5, result3 })))
-console.log("+1.5% outcome:", {
-  target: scored.filter((row) => row.result1_5.startsWith("+1.5%")).length,
-  stopped: scored.filter((row) => row.result1_5.startsWith("Stopped")).length,
-  unresolved: scored.filter((row) => row.result1_5 === "Unresolved").length,
+    return3Pct, baseRangePct, volumeRatio, volume5Ratio, liveFlow, liveVolumePace, bestLaterPct, result1, result3 })))
+console.log("+1% outcome:", {
+  target: scored.filter((row) => row.result1.startsWith("+1%")).length,
+  stopped: scored.filter((row) => row.result1.startsWith("Stopped")).length,
+  unresolved: scored.filter((row) => row.result1 === "Unresolved").length,
 })
