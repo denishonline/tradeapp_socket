@@ -24,6 +24,8 @@ const number = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 })
 const percent = new Intl.NumberFormat("en-IN", { signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const time = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit" })
 const axisTime = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
+const radarStrategies = ["Persistent Bid Absorption Breakout", "Early Depth-Control Breakout",
+  "Bid Support Breakout", "Bid-Dominant Recovery"]
 
 const socket = io({ transports: ["websocket", "polling"] })
 
@@ -302,10 +304,14 @@ function upsertCandle(candle) {
 
 function renderStrategySignals(signals) {
   if (!signals.length) {
-    elements.strategySignalGroups.innerHTML = `<p class="placeholder">Waiting for candle and depth confirmation…</p>`
+    elements.strategySignalGroups.innerHTML = radarStrategies.map((strategy) => `
+      <section class="strategy-signal-group">
+        <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>0</span></div>
+        <p class="strategy-empty">Waiting for signal</p>
+      </section>`).join("")
     return
   }
-  const groups = new Map()
+  const groups = new Map(radarStrategies.map((strategy) => [strategy, []]))
   for (const signal of signals) {
     const strategy = signal.strategy || "Other strategies"
     if (!groups.has(strategy)) groups.set(strategy, [])
@@ -314,7 +320,7 @@ function renderStrategySignals(signals) {
   elements.strategySignalGroups.innerHTML = [...groups.entries()].map(([strategy, items]) => `
     <section class="strategy-signal-group">
       <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>${items.length}</span></div>
-      <div class="strategy-signal-list">${items.map((signal) => {
+      <div class="strategy-signal-list">${items.length ? items.map((signal) => {
         const at = Date.parse(signal.time)
         const signalTime = Number.isFinite(at) ? `${axisTime.format(new Date(at))} IST` : "Time unavailable"
         const state = signal.status || "Signal"
@@ -325,7 +331,7 @@ function renderStrategySignals(signals) {
           <span class="strategy-signal-copy"><strong>${escapeHtml(signal.symbol)}</strong><small>${direction}${signalTime} · ${money.format(signal.price)}</small></span>
           <span class="strategy-signal-state" data-state="${escapeHtml(state.toLowerCase().replaceAll(" ", "-"))}">${escapeHtml(state)}</span>
         </button>`
-      }).join("")}</div>
+      }).join("") : `<p class="strategy-empty">Waiting for signal</p>`}</div>
     </section>`).join("")
 }
 

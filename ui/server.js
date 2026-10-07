@@ -18,6 +18,7 @@ import { createTradingRuntime } from "./trading/runtime.js"
 import { createPersistentBidBreakout } from "./persistent-bid-breakout.js"
 import { createEarlyDepthBreakout } from "./early-depth-breakout.js"
 import { createBidSupportBreakout } from "./bid-support-breakout.js"
+import { createBidRecoveryRadar } from "./bid-recovery-radar.js"
 import { createStrategySignalStore } from "./strategy-signal-store.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -68,10 +69,12 @@ const io = new SocketServer(httpServer, {
 const signalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "persistent-bid-breakout"))
 const earlySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "early-depth-breakout"))
 const bidSupportSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "bid-support-breakout"))
+const bidRecoverySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "bid-recovery-radar"))
 let earlyRadar
 let bidSupportRadar
+let bidRecoveryRadar
 function radarSnapshot() {
-  return [...strategyRadar.snapshot(), ...earlyRadar.snapshot(), ...bidSupportRadar.snapshot()]
+  return [...strategyRadar.snapshot(), ...earlyRadar.snapshot(), ...bidSupportRadar.snapshot(), ...bidRecoveryRadar.snapshot()]
     .sort((left, right) => Date.parse(right.time) - Date.parse(left.time))
 }
 function emitRadarSignals() {
@@ -101,6 +104,14 @@ bidSupportRadar = createBidSupportBreakout({
     emitRadarSignals()
   },
 })
+bidRecoveryRadar = createBidRecoveryRadar({
+  initialSignals: bidRecoverySignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { bidRecoverySignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save bid recovery signals:", error.message) }
+    emitRadarSignals()
+  },
+})
 const candleBuilder = createLiveCandleBuilder({
   store: candles,
   io,
@@ -108,6 +119,7 @@ const candleBuilder = createLiveCandleBuilder({
     strategyRadar.observeCandle(symbol, candle)
     earlyRadar.observeCandle(symbol, candle)
     bidSupportRadar.observeCandle(symbol, candle)
+    bidRecoveryRadar.observeCandle(symbol, candle)
   },
   onError: (symbol, error) => {
     candleCapture.error = `Candle storage error for ${symbol}: ${error.message}`
@@ -251,6 +263,7 @@ async function stopMarketEngine(message = "Market stream stopped") {
   strategyRadar.resetLiveState()
   earlyRadar.resetLiveState()
   bidSupportRadar.resetLiveState()
+  bidRecoveryRadar.resetLiveState()
   const currentFeed = feed
   const currentTrading = trading
   feed = null
@@ -355,6 +368,7 @@ app.post("/api/control/start", async (_request, response) => {
     await strategyRadar.seed(stocks, candles)
     await earlyRadar.seed(stocks, candles)
     await bidSupportRadar.seed(stocks, candles)
+    await bidRecoveryRadar.seed(stocks, candles)
     const nextTrading = await createTradingRuntime({ rootDirectory, constants: CONSTANT, config: DEPTH_TREND, history })
     const nextFeed = createMarketFeed({
       io,
@@ -369,9 +383,11 @@ app.post("/api/control/start", async (_request, response) => {
           strategyRadar.observeDepth(data, at, marketContext)
           earlyRadar.observeDepth(data, at)
           bidSupportRadar.observeDepth(data, at, marketContext)
+          bidRecoveryRadar.observeDepth(data, at)
         }
         if (kind === "price") {
           candleCapture.priceTicks++
+          bidRecoveryRadar.observePrice(data, at)
           candleCapture.lastPriceAt = at instanceof Date ? at.toISOString() : new Date(at).toISOString()
           if (candleBuilder.observe(data, at)) candleCapture.candleUpdates++
         }
@@ -381,6 +397,7 @@ app.post("/api/control/start", async (_request, response) => {
         strategyRadar.resetLiveState()
         earlyRadar.resetLiveState()
         bidSupportRadar.resetLiveState()
+        bidRecoveryRadar.resetLiveState()
         candleBuilder.reset()
       },
       onReady: nextTrading.ready,
@@ -493,7 +510,10 @@ io.on("connection", (socket) => {
 })
 
 const earlyRadarTimer = setInterval(() => {
-  if (feed) earlyRadar.flushCompleted(Date.now())
+  if (feed) {
+    earlyRadar.flushCompleted(Date.now())
+    bidRecoveryRadar.flushCompleted(Date.now())
+  }
 }, 1000)
 
 const statusTimer = setInterval(() => {

@@ -1,0 +1,8 @@
+"stock","first_signal_ist","last_signal_ist","matching_windows","longest_window_minutes","first_window_start_ist","first_window_candle_return_pct","first_window_recovery_from_low_pct","first_window_green_candle_volume_pct","first_window_ema20_below_ema50","first_window_ema20_slope_5m_pct","first_window_full_bid_share_pct","first_window_top2_bid_share_pct","first_window_avg_displayed_bid_shares","first_window_avg_displayed_ask_shares","first_window_positive_flow_minutes_last5","first_window_mean_normalized_flow_last5","first_window_entry_open","first_window_plus1_vs_minus0_4","first_window_outcome_at_ist"
+"POLYCAB","10:31","10:31","1","15","10:16","-0.294","0.302","51.1","false","-0.103","67.4","66.3","329","124","4","0.049","8127.5","stop first","10:39"
+"HINDPETRO","10:58","10:59","2","15","10:48","-0.276","0.292","30.9","true","-0.153","66.9","69.3","8229","3691","3","0.032","343.85","stop first","11:23"
+"HINDPETRO","11:03","11:03","1","15","10:48","-0.218","0.35","30.5","true","0.009","70.3","71.1","11282","3524","4","0.048","344","stop first","11:23"
+"HAVELLS","12:03","12:03","1","15","11:48","-0.324","0.192","37.9","true","-0.097","71.7","73.3","1067","407","3","0.032","1045.8","unresolved",""
+"BANDHANBNK","13:54","13:54","1","10","13:44","-0.24","0.206","34","false","-0.003","81","79.1","6685","1084","4","0.057","170.19","stop first","14:06"
+"ADANIENT","14:13","14:13","1","10","14:03","-0.484","0.232","43.7","false","-0.196","75.6","73.9","674","157","3","0.042","2855.7","unresolved",""
+"NAUKRI","14:14","14:14","1","10","14:04","-0.322","0.175","77.7","true","-0.117","70.1","71.7","1257","554","3","0.127","1205.7","stop first","14:36"
