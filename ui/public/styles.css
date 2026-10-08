@@ -48,12 +48,12 @@ button { color: inherit; }
 .connection-chip[data-state="connecting"] .status-dot,
 .connection-chip[data-state="starting"] .status-dot,
 .connection-chip[data-state="reconnecting"] .status-dot { background: var(--amber); }
-.capture-statuses { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: -4px 0 10px; }
-.capture-status { display: flex; min-width: 0; min-height: 38px; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid var(--border-soft); border-radius: 8px; background: rgba(255, 255, 255, .78); }
-.capture-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #9aa4b3; }
-.capture-copy { display: grid; min-width: 0; gap: 2px; }
-.capture-copy strong { font-size: 9px; }
-.capture-copy small { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.capture-statuses { display: flex; flex-direction: column; align-self: center; align-items: stretch; gap: 2px; margin: 0; }
+.capture-status { display: flex; width: auto; min-width: 170px; min-height: 14px; align-items: center; gap: 4px; padding: 1px 5px; border: 1px solid var(--border-soft); border-radius: 5px; background: rgba(255, 255, 255, .78); }
+.capture-dot { width: 4px; height: 4px; flex: 0 0 4px; border-radius: 50%; background: #9aa4b3; }
+.capture-copy { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.capture-copy strong { font-size: 7px; line-height: 1; white-space: nowrap; }
+.capture-copy small { max-width: 115px; overflow: hidden; color: var(--muted); font-size: 6px; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
 .capture-status[data-state="live"], .capture-status[data-state="receiving"] { border-color: rgba(7, 134, 95, .2); background: rgba(7, 134, 95, .04); }
 .capture-status[data-state="live"] .capture-dot, .capture-status[data-state="receiving"] .capture-dot { background: var(--green); }
 .capture-status[data-state="starting"] .capture-dot, .capture-status[data-state="connecting"] .capture-dot, .capture-status[data-state="waiting"] .capture-dot, .capture-status[data-state="reconnecting"] .capture-dot { background: var(--amber); animation: pulse 1.2s infinite; }
@@ -63,7 +63,7 @@ button { color: inherit; }
 main { display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; }
 .control-bar { display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 16px; margin-bottom: 12px; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .eyebrow { margin-bottom: 5px !important; color: var(--blue); font-size: 9px; font-weight: 800; letter-spacing: .14em; }
-.actions { display: flex; align-self: flex-start; gap: 8px; }
+.actions { display: flex; align-self: flex-start; align-items: center; gap: 8px; }
 .status-group { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 9px; }
 .action-button { display: flex; align-items: center; min-width: 150px; height: 48px; gap: 9px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: #f8fafc; text-align: left; box-shadow: 0 2px 7px rgba(45, 62, 91, .04); }
 .action-button:disabled { cursor: not-allowed; opacity: .52; }
@@ -169,7 +169,7 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 4px rgba(34, 201, 138, .09); } 50% { box-shadow: 0 0 0 7px rgba(34, 201, 138, .02); } }
 
 @media (max-width: 1100px) {
-  .actions { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(150px, auto); }
   .action-button { min-width: 0; }
   .workspace { grid-template-columns: minmax(230px, 3fr) minmax(0, 7fr); }
 }
@@ -177,8 +177,9 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 @media (max-width: 680px) {
   .app-shell { padding: 8px 10px 10px; }
   .control-bar { flex-wrap: wrap; gap: 7px; margin-bottom: 8px; padding: 8px 9px; }
-  .capture-statuses { grid-template-columns: 1fr; gap: 4px; margin-bottom: 7px; }
-  .capture-status { min-height: 30px; padding: 4px 8px; }
+  .capture-statuses { grid-column: 1 / -1; align-items: flex-start; gap: 2px; }
+  .capture-status { min-height: 14px; padding: 1px 5px; }
+  .capture-copy small { max-width: 160px; }
   .connection-chip { max-width: 65vw; min-height: 28px; font-size: 9px; }
   .actions { width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
   .status-group { width: 100%; }

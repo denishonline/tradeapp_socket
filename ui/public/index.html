@@ -24,32 +24,31 @@
             <button class="action-button primary" id="startServerButton" type="button">
               <span class="step">3</span><span><strong id="serverActionLabel">Start Server</strong><small id="serverLabel">Price + depth streams</small></span>
             </button>
+            <section class="capture-statuses" aria-label="Live capture status">
+              <div class="capture-status" data-state="stopped" id="captureServerStatus">
+                <span class="capture-dot" aria-hidden="true"></span>
+                <span class="capture-copy"><strong>Server</strong><small id="captureServerMessage">Market stream is stopped</small></span>
+              </div>
+              <div class="capture-status" data-state="stopped" id="captureDepthStatus">
+                <span class="capture-dot" aria-hidden="true"></span>
+                <span class="capture-copy"><strong>Market depth</strong><small id="captureDepthMessage">Waiting for server start</small></span>
+              </div>
+              <div class="capture-status" data-state="stopped" id="captureCandleStatus">
+                <span class="capture-dot" aria-hidden="true"></span>
+                <span class="capture-copy"><strong>Stock candles - 1 min</strong><small id="captureCandleMessage">Waiting for server start</small></span>
+              </div>
+            </section>
           </div>
           <div class="status-group">
-            <div class="mode-badge" id="orderMode">Order mode: â€”</div>
             <div class="live-status-stack">
-              <div class="connection-chip" data-state="stopped" id="connectionChip">
+              <!-- <div class="connection-chip" data-state="stopped" id="connectionChip">
                 <span class="status-dot" aria-hidden="true"></span>
                 <span id="connectionText">Market stream stopped</span>
-              </div>
+              </div> -->
               <small id="databaseSize">db/ size: calculating...</small>
               <small id="liveTime">Live time: --:--:-- IST</small>
+              <div class="mode-badge" id="orderMode">Order mode: â€”</div>
             </div>
-          </div>
-        </section>
-
-        <section class="capture-statuses" aria-label="Live capture status">
-          <div class="capture-status" data-state="stopped" id="captureServerStatus">
-            <span class="capture-dot" aria-hidden="true"></span>
-            <span class="capture-copy"><strong>Server</strong><small id="captureServerMessage">Market stream is stopped</small></span>
-          </div>
-          <div class="capture-status" data-state="stopped" id="captureDepthStatus">
-            <span class="capture-dot" aria-hidden="true"></span>
-            <span class="capture-copy"><strong>Market depth</strong><small id="captureDepthMessage">Waiting for server start</small></span>
-          </div>
-          <div class="capture-status" data-state="stopped" id="captureCandleStatus">
-            <span class="capture-dot" aria-hidden="true"></span>
-            <span class="capture-copy"><strong>Stock candles - 1 min</strong><small id="captureCandleMessage">Waiting for server start</small></span>
           </div>
         </section>
 
