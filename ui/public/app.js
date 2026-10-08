@@ -29,7 +29,7 @@ const axisTime = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", ho
 const radarDateTime = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short",
   year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
 const radarStrategies = ["Persistent Bid Absorption Breakout", "Early Depth-Control Breakout",
-  "Bid Support Breakout", "Bid-Dominant Recovery"]
+  "Bid Support Breakout", "Bid-Dominant Recovery", "Multi-Frame Depth Continuation"]
 
 const socket = io({ transports: ["websocket", "polling"] })
 
