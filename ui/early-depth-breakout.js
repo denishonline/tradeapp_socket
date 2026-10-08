@@ -4,7 +4,11 @@ import { toStockName } from "./market-data.js"
 const MINUTE = 60_000
 const MAX_CANDLES = 180
 const SEED_CANDLES = 500
-const EVALUATION_DELAY_MS = 5_000
+const EVALUATION_DELAY_MS = 15_000
+const MAX_LATEST_CANDLE_VOLUME_SHARE = 0.55
+const MIN_CONFIRMATION_TICKS = 8
+const MIN_CONFIRMATION_FULL_IMBALANCE = 0.15
+const MIN_CONFIRMATION_BID_MOVE_PCT = 0.01
 const TARGET_PCT = 3
 const STOP_PCT = 0.5
 const mean = (rows, field) => rows.reduce((sum, row) => sum + row[field], 0) / rows.length
@@ -119,6 +123,21 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     }
   }
 
+  function observePrice(data, receivedAt) {
+    if (!data || typeof data.symbol !== "string") return
+    const symbol = toStockName(data.symbol)
+    const at = receivedAt instanceof Date ? receivedAt.getTime() : Number(receivedAt)
+    const price = Number(data.ltp)
+    if (!symbol || !Number.isFinite(at) || !Number.isFinite(price) || price <= 0) return
+    const active = signals.find((signal) => signal.symbol === symbol && signal.status === "Active")
+    if (!active || at <= Date.parse(active.time)) return
+    if (price <= active.stop) active.status = "Stopped"
+    else if (price >= active.target) active.status = "Target reached"
+    else return
+    active.resolvedAt = new Date(at).toISOString()
+    publish()
+  }
+
   function observeDepth(data, receivedAt) {
     if (!data || typeof data.symbol !== "string") return
     const symbol = toStockName(data.symbol)
@@ -160,7 +179,7 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     bookStateByStock.set(symbol, state)
   }
 
-  function evaluate(symbol, depthMinute) {
+  function evaluate(symbol, depthMinute, evaluatedAt) {
     const signalAt = depthMinute + MINUTE
     const rows = (candlesByStock.get(symbol) || []).filter((row) => row.time * 1000 + MINUTE <= signalAt)
     const last15 = rows.slice(-15)
@@ -177,9 +196,12 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     const priorVolume = mean(previous10, "volume")
     const volumeMultiple = mean(recent5, "volume") / (priorVolume || 1)
     const elevatedVolumeBars = recent5.filter((row) => row.volume >= priorVolume).length
+    const latestCandleVolumeShare = last.volume /
+      (recent5.reduce((total, row) => total + row.volume, 0) || 1)
     const breakoutPct = pct(last.close, Math.max(...previous10.map((row) => row.high)))
     if (dayPctFromOpen <= 0 || return5Pct < 0.5 || volumeMultiple < 1.5 ||
-        elevatedVolumeBars < 2 || breakoutPct <= 0) return
+        elevatedVolumeBars < 2 || latestCandleVolumeShare > MAX_LATEST_CANDLE_VOLUME_SHARE ||
+        breakoutPct <= 0) return
     const buckets = depthByStock.get(symbol)
     if (!buckets) return
     const books = []
@@ -201,7 +223,15 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
       (latest2.reduce((sum, row) => sum + row.ofiDepthSum, 0) || 1)
     const bidMovePct = pct(latest.lastBid, books[2].firstBid)
     if (currentFlow <= 0 || flow2 <= 0 || bidMovePct < 0.25 || signalAt - latest.lastAt > 30_000) return
-    const entry = latest.lastAsk
+    const confirmation = buckets.get(signalAt)
+    if (!confirmation || confirmation.count < MIN_CONFIRMATION_TICKS ||
+        confirmation.lastAt < signalAt || evaluatedAt - confirmation.lastAt > 5_000) return
+    const confirmationFullImbalance = confirmation.fullSum / confirmation.count
+    const confirmationOrderFlow = confirmation.ofiSum / (confirmation.ofiDepthSum || 1)
+    const confirmationBidMovePct = pct(confirmation.lastBid, confirmation.firstBid)
+    if (confirmationFullImbalance < MIN_CONFIRMATION_FULL_IMBALANCE ||
+        confirmationOrderFlow <= 0 || confirmationBidMovePct < MIN_CONFIRMATION_BID_MOVE_PCT) return
+    const entry = confirmation.lastAsk
     const quoteExtensionPct = pct(entry, last.close)
     if (quoteExtensionPct > 0.5 || signalAt - (lastSignalAtByStock.get(symbol) || 0) < 30 * MINUTE) return
     const id = `${symbol}:${Math.floor(signalAt / 1000)}:early-depth-breakout`
@@ -211,18 +241,22 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
       strategy: "Early Depth-Control Breakout",
       symbol,
       direction: "BUY",
-      pattern: "Candle breakout confirmed by accelerating buyer depth",
-      time: new Date(signalAt).toISOString(),
+      pattern: "Candle breakout confirmed by persistent live buyer depth",
+      time: new Date(evaluatedAt).toISOString(),
       price: entry,
       stop: entry * (1 - STOP_PCT / 100),
       target: entry * (1 + TARGET_PCT / 100),
       status: "Active",
       candleMinute: last.time,
-      metrics: { dayPctFromOpen, return5Pct, volumeMultiple, elevatedVolumeBars, breakoutPct,
+      metrics: { dayPctFromOpen, return5Pct, volumeMultiple, elevatedVolumeBars,
+        latestCandleVolumeShare, breakoutPct,
         fullImbalance2: full2, top2Imbalance2: top2_2,
         fullAcceleration: full2 - prior3Full, top2Acceleration: top2_2 - prior3Top2,
         currentQuoteFlow: currentFlow, normalizedQuoteFlow2: flow2,
         bestBidMove3Pct: bidMovePct, quoteExtensionPct,
+        confirmationDelaySeconds: EVALUATION_DELAY_MS / 1000,
+        confirmationDepthTicks: confirmation.count,
+        confirmationFullImbalance, confirmationOrderFlow, confirmationBidMovePct,
         candleAgeMinutes: (signalAt - last.time * 1000 - MINUTE) / MINUTE },
     }
     signals.push(signal)
@@ -240,7 +274,7 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     for (const [symbol] of depthByStock) {
       if ((evaluatedMinuteByStock.get(symbol) ?? -Infinity) >= depthMinute) continue
       evaluatedMinuteByStock.set(symbol, depthMinute)
-      evaluate(symbol, depthMinute)
+      evaluate(symbol, depthMinute, at)
     }
   }
 
@@ -250,5 +284,5 @@ export function createEarlyDepthBreakout({ onUpdate = () => {}, initialSignals =
     evaluatedMinuteByStock.clear()
   }
 
-  return { seed, observeCandle, observeDepth, flushCompleted, resetLiveState, snapshot }
+  return { seed, observeCandle, observeDepth, observePrice, flushCompleted, resetLiveState, snapshot }
 }

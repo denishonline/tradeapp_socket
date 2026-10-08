@@ -455,6 +455,7 @@ app.post("/api/control/start", async (_request, response) => {
         }
         if (kind === "price") {
           candleCapture.priceTicks++
+          earlyRadar.observePrice(data, at)
           bidRecoveryRadar.observePrice(data, at)
           multiFrameSellRadar.observePrice(data, at)
           multiFrameBuyRadar.observePrice(data, at)
