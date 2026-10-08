@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="FYERS live depth strategy and one-minute candle dashboard" />
-    <title>Market Pulse Â· Trading Dashboard</title>
+    <title>Trading Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -19,7 +19,7 @@
               <span class="step">1</span><span><strong>AutoLogin</strong><small id="authLabel">Session</small></span>
             </button>
             <button class="action-button" id="preCandlesButton" type="button">
-              <span class="step">2</span><span><strong>Fetch Pre Candles</strong><small id="historyLabel">30 days Â· 1 minute</small></span>
+              <span class="step">2</span><span><strong>Fetch Pre Candles</strong><small id="historyLabel">30 days - 1 minute</small></span>
             </button>
             <button class="action-button primary" id="startServerButton" type="button">
               <span class="step">3</span><span><strong id="serverActionLabel">Start Server</strong><small id="serverLabel">Price + depth streams</small></span>
@@ -49,25 +49,18 @@
           </div>
           <div class="capture-status" data-state="stopped" id="captureCandleStatus">
             <span class="capture-dot" aria-hidden="true"></span>
-            <span class="capture-copy"><strong>Stock candles Â· 1 min</strong><small id="captureCandleMessage">Waiting for server start</small></span>
+            <span class="capture-copy"><strong>Stock candles - 1 min</strong><small id="captureCandleMessage">Waiting for server start</small></span>
           </div>
         </section>
 
         <section class="workspace" aria-label="Trading workspace">
-          <aside class="panel stock-panel">
-            <div class="panel-heading">
-              <div class="stock-heading-copy">
-                <div class="stock-heading-title"><h2>All stocks</h2></div>
-                <p id="stockCount">Loading symbolsâ€¦</p>
-              </div>
-              <label class="search-box"><span class="sr-only">Search stocks</span><input id="searchInput" type="search" placeholder="Search" autocomplete="off" /></label>
-            </div>
-            <div class="stock-list" id="stockList" aria-live="polite"></div>
-          </aside>
-
           <aside class="panel strategy-panel">
             <div class="panel-heading">
               <div><h2>Strategy radar</h2><p>Live candle and market-depth strategies</p></div>
+              <div class="strategy-heading-actions">
+                <button type="button" class="radar-alert-button" id="radarAlertButton">Enable alerts</button>
+                <button type="button" class="nifty-chart-button" id="niftyChartButton">NIFTY 50</button>
+              </div>
             </div>
             <div class="strategy-signal-groups" id="strategySignalGroups" aria-live="polite">
               <p class="placeholder">Waiting for candle and depth confirmation…</p>
@@ -77,7 +70,7 @@
           <section class="panel chart-panel">
             <div class="chart-heading">
               <div>
-                <p class="eyebrow">1 MINUTE Â· LAST 360</p>
+                <p class="eyebrow">1 MINUTE - LAST 360</p>
                 <div class="chart-title"><h2 id="chartSymbol">Select a stock</h2><span id="chartPrice">â€”</span><span id="chartChange"></span></div>
                 <p id="chartSubtitle">Click any symbol to open its stored and live candles.</p>
               </div>

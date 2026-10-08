@@ -163,7 +163,9 @@ export function createExecution({ constants, config = {}, broker, journal, contr
       commit({ type: "ENTRY_SKIPPED", symbol: signal.symbol, reason: "Current-day instrument metadata unavailable; restart to refresh" })
       return
     }
-    const kinds = mode.cash || mode.option ? [ ...(mode.cash ? ["cash"] : []), ...(mode.option ? ["option"] : []) ] : ["cash"]
+    const kinds = signal.kind === "cash"
+      ? (mode.cash ? ["cash"] : [])
+      : mode.cash || mode.option ? [ ...(mode.cash ? ["cash"] : []), ...(mode.option ? ["option"] : []) ] : ["cash"]
     commit({ type: "ENTRY_SIGNAL", signal })
     for (const kind of kinds) {
       if (fault || state.positions.length + state.pending.length >= constants.maxPositions) break

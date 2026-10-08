@@ -1,5 +1,6 @@
 import dotenv from "dotenv"
 import express from "express"
+import apiV3 from "fyers-api-v3"
 import { createServer } from "node:http"
 import { readdir, stat } from "node:fs/promises"
 import path from "node:path"
@@ -160,6 +161,42 @@ function accessToken() {
 
 function hasToken() {
   return Boolean(accessToken())
+}
+
+async function readNifty50Candles(limit = 360) {
+  const token = accessToken()
+  if (!token) throw new Error("Run AutoLogin before loading the NIFTY 50 chart.")
+  const client = new apiV3.fyersModel({ enableLogging: false })
+  client.setAppId(CONSTANT.appId)
+  client.setAccessToken(token)
+  const now = Math.floor(Date.now() / 1000)
+  const response = await client.getHistory({
+    symbol: "NSE:NIFTY50-INDEX",
+    resolution: "1",
+    date_format: "0",
+    range_from: String(now - 10 * 24 * 60 * 60),
+    range_to: String(now),
+    cont_flag: "1",
+  })
+  if (response?.s !== "ok" || !Array.isArray(response.candles)) {
+    throw new Error(response?.message || response?.msg || "FYERS returned no NIFTY 50 candle data.")
+  }
+  const candles = response.candles.flatMap((row) => {
+    if (!Array.isArray(row) || row.length < 6) return []
+    const candle = {
+      time: Number(row[0]), open: Number(row[1]), high: Number(row[2]),
+      low: Number(row[3]), close: Number(row[4]), volume: Math.max(0, Math.trunc(Number(row[5]) || 0)),
+      source: "fyers-history",
+    }
+    const prices = [candle.open, candle.high, candle.low, candle.close]
+    if (!Number.isSafeInteger(candle.time) || !prices.every((price) => Number.isFinite(price) && price > 0) ||
+        candle.high < Math.max(candle.open, candle.close) || candle.low > Math.min(candle.open, candle.close)) return []
+    const india = new Date(candle.time * 1000 + 330 * 60_000)
+    const weekday = india.getUTCDay()
+    const minute = india.getUTCHours() * 60 + india.getUTCMinutes()
+    return weekday >= 1 && weekday <= 5 && minute >= 9 * 60 + 15 && minute < 15 * 60 + 30 ? [candle] : []
+  }).sort((left, right) => left.time - right.time)
+  return candles.slice(-Math.max(1, Math.min(1000, Number(limit) || 360)))
 }
 
 async function stockSnapshot() {
@@ -459,8 +496,49 @@ app.post("/api/control/stop", async (_request, response) => {
   }
 })
 
+app.post("/api/control/radar-cash-order", (request, response) => {
+  if (!trading) {
+    response.status(409).json({ ok: false, message: "Start the market server before placing an order." })
+    return
+  }
+  const signalId = typeof request.body?.signalId === "string" ? request.body.signalId : ""
+  const signal = radarSnapshot().find((item) => item.id === signalId)
+  if (!signal) {
+    response.status(404).json({ ok: false, message: "Strategy Radar signal was not found." })
+    return
+  }
+  if (signal.status !== "Active") {
+    response.status(409).json({ ok: false, message: `This signal is ${String(signal.status || "inactive").toLowerCase()}.` })
+    return
+  }
+  const direction = String(signal.direction || "BUY").toUpperCase()
+  if (direction !== "BUY") {
+    response.status(400).json({ ok: false, message: "Manual cash SELL signals are not supported by the current long-only execution engine." })
+    return
+  }
+  try {
+    const queued = trading.placeCashOrder({
+      symbol: signal.symbol,
+      price: Number(signal.price),
+      at: Date.parse(signal.time),
+      reason: `strategy_radar:${signal.strategy}`,
+    })
+    response.status(202).json({ ok: true, message: `${queued.action} cash order queued for ${queued.symbol}.` })
+  } catch (error) {
+    response.status(409).json({ ok: false, message: error.message })
+  }
+})
+
 app.get("/api/candles/:symbol", async (request, response) => {
   const symbol = String(request.params.symbol || "").trim().toUpperCase()
+  if (symbol === "NIFTY50") {
+    try {
+      response.json({ ok: true, symbol, candles: await readNifty50Candles(request.query.limit) })
+    } catch (error) {
+      response.status(502).json({ ok: false, message: error.message })
+    }
+    return
+  }
   if (!stocks.includes(symbol)) {
     response.status(404).json({ ok: false, message: "Unknown stock symbol" })
     return

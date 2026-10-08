@@ -1,5 +1,5 @@
 const elements = Object.fromEntries([
-  "stockList", "searchInput", "stockCount", "connectionChip", "connectionText",
+  "connectionChip", "connectionText", "niftyChartButton", "radarAlertButton",
   "autoLoginButton", "preCandlesButton", "startServerButton", "authLabel",
   "historyLabel", "serverLabel", "serverActionLabel", "orderMode", "strategySignalGroups",
   "captureServerStatus", "captureServerMessage", "captureDepthStatus", "captureDepthMessage",
@@ -9,7 +9,7 @@ const elements = Object.fromEntries([
 ].map((id) => [id, document.querySelector(`#${id}`)]))
 
 const stocks = new Map()
-const stockNodes = new Map()
+const NIFTY50_SYMBOL = "NIFTY50"
 let selectedSymbol = null
 let candles = []
 let liveMinute = null
@@ -18,12 +18,16 @@ let chartRequest = 0
 let toastTimer
 let startRequestPending = false
 let startTimeout = null
+let radarSignalsInitialized = false
+const knownRadarSignalIds = new Set()
 
 const money = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2 })
 const number = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 })
 const percent = new Intl.NumberFormat("en-IN", { signDisplay: "always", minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const time = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit" })
 const axisTime = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })
+const radarDateTime = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short",
+  year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
 const radarStrategies = ["Persistent Bid Absorption Breakout", "Early Depth-Control Breakout",
   "Bid Support Breakout", "Bid-Dominant Recovery"]
 
@@ -46,16 +50,18 @@ socket.on("history:status", (history) => applyControlStatus({ ...(control || {})
 socket.on("stocks:snapshot", (snapshot) => {
   stocks.clear()
   for (const stock of snapshot) stocks.set(stock.symbol, stock)
-  renderStockList()
-  if (!selectedSymbol && snapshot.length) selectStock(snapshot[0].symbol)
+  if (!selectedSymbol) void selectStock(NIFTY50_SYMBOL)
   else paintSelectedQuote()
 })
 socket.on("stocks:update", (tick) => {
   stocks.set(tick.symbol, { ...(stocks.get(tick.symbol) || {}), ...tick })
-  paintStock(tick.symbol)
   if (tick.symbol === selectedSymbol) paintSelectedQuote()
 })
-socket.on("strategy:signals", (signals) => renderStrategySignals(signals || []))
+socket.on("strategy:signals", (signals) => {
+  const current = signals || []
+  notifyNewRadarSignals(current)
+  renderStrategySignals(current)
+})
 socket.on("candle:update", ({ symbol, candle }) => {
   if (symbol !== selectedSymbol) return
   liveMinute = candle
@@ -67,12 +73,14 @@ socket.on("candle:complete", ({ symbol, candle }) => {
   upsertCandle(candle)
 })
 
-elements.searchInput.addEventListener("input", renderStockList)
-elements.stockList.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-symbol]")
-  if (button) selectStock(button.dataset.symbol)
-})
+elements.niftyChartButton.addEventListener("click", () => void selectStock(NIFTY50_SYMBOL))
+elements.radarAlertButton.addEventListener("click", () => void enableRadarNotifications())
 elements.strategySignalGroups.addEventListener("click", (event) => {
+  const orderButton = event.target.closest("[data-radar-order]")
+  if (orderButton) {
+    void placeRadarCashOrder(orderButton)
+    return
+  }
   const button = event.target.closest("[data-symbol]")
   if (button) selectStock(button.dataset.symbol)
 })
@@ -212,48 +220,16 @@ function setFeedStatus(state, message) {
   elements.connectionText.textContent = message || state
 }
 
-function renderStockList() {
-  const filter = elements.searchInput.value.trim().toUpperCase()
-  const visible = [...stocks.values()].filter((stock) => stock.symbol.includes(filter))
-  const fragment = document.createDocumentFragment()
-  stockNodes.clear()
-  for (const stock of visible) {
-    const button = document.createElement("button")
-    button.type = "button"
-    button.className = `stock-row${stock.symbol === selectedSymbol ? " selected" : ""}`
-    button.dataset.symbol = stock.symbol
-    button.innerHTML = `<span class="symbol"><strong>${escapeHtml(stock.symbol)}</strong><small>NSE · EQ</small></span><span class="quote"><strong data-price>—</strong><small data-change>Waiting</small></span>`
-    stockNodes.set(stock.symbol, button)
-    fragment.append(button)
-  }
-  elements.stockList.replaceChildren(fragment)
-  for (const stock of visible) paintStock(stock.symbol)
-  elements.stockCount.textContent = filter ? `${visible.length} of ${stocks.size} symbols` : `${stocks.size} tracked symbols`
-}
-
-function paintStock(symbol) {
-  const stock = stocks.get(symbol)
-  const row = stockNodes.get(symbol)
-  if (!stock || !row) return
-  row.querySelector("[data-price]").textContent = Number.isFinite(stock.price) ? money.format(stock.price) : "—"
-  const change = row.querySelector("[data-change]")
-  if (Number.isFinite(stock.changePercent)) {
-    change.textContent = `${percent.format(stock.changePercent)}%`
-    change.className = stock.changePercent > 0 ? "positive" : stock.changePercent < 0 ? "negative" : ""
-  } else {
-    change.textContent = "Waiting"
-    change.className = ""
-  }
-}
-
 async function selectStock(symbol) {
-  if (!stocks.has(symbol)) return
+  const nifty50 = symbol === NIFTY50_SYMBOL
+  if (!nifty50 && !stocks.has(symbol)) return
   selectedSymbol = symbol
-  for (const [name, node] of stockNodes) node.classList.toggle("selected", name === symbol)
+  if (nifty50) candles = []
   elements.chartSymbol.textContent = symbol
-  elements.chartSubtitle.textContent = "Loading stored candles..."
+  elements.chartSubtitle.textContent = nifty50 ? "Loading NIFTY 50 candles..." : "Loading stored candles..."
   elements.chartEmpty.textContent = "Loading candles..."
   elements.chartEmpty.hidden = false
+  elements.niftyChartButton.disabled = nifty50
   paintSelectedQuote()
   const request = ++chartRequest
   try {
@@ -264,10 +240,12 @@ async function selectStock(symbol) {
     candles = result.candles || []
     liveMinute = null
     elements.chartSubtitle.textContent = candles.length
-      ? `${candles.length} stored candles · pre-history + live stream`
+      ? nifty50 ? `${candles.length} NIFTY 50 candles · FYERS one-minute history`
+        : `${candles.length} stored candles · pre-history + live stream`
       : "No stored candles yet. Fetch pre candles or start the live stream."
-    elements.chartEmpty.textContent = "No candle data for this stock yet."
+    elements.chartEmpty.textContent = nifty50 ? "NIFTY 50 candle data is unavailable." : "No candle data for this stock yet."
     elements.chartEmpty.hidden = candles.length > 0
+    paintSelectedQuote()
     drawChart()
   } catch (error) {
     if (request !== chartRequest) return
@@ -276,10 +254,24 @@ async function selectStock(symbol) {
     elements.chartEmpty.textContent = "Candle data is unavailable."
     elements.chartEmpty.hidden = false
     drawChart()
+  } finally {
+    if (request === chartRequest) elements.niftyChartButton.disabled = false
   }
 }
 
 function paintSelectedQuote() {
+  if (selectedSymbol === NIFTY50_SYMBOL) {
+    const latest = candles.at(-1)
+    const latestDay = latest ? new Date(latest.time * 1000 + 330 * 60_000).toISOString().slice(0, 10) : null
+    const session = latestDay ? candles.filter((candle) =>
+      new Date(candle.time * 1000 + 330 * 60_000).toISOString().slice(0, 10) === latestDay) : []
+    const dayOpen = session[0]?.open
+    const changePercent = latest && dayOpen ? (latest.close / dayOpen - 1) * 100 : null
+    elements.chartPrice.textContent = latest ? number.format(latest.close) : "—"
+    elements.chartChange.textContent = Number.isFinite(changePercent) ? `${percent.format(changePercent)}%` : ""
+    elements.chartChange.className = changePercent >= 0 ? "positive" : "negative"
+    return
+  }
   const stock = stocks.get(selectedSymbol)
   elements.chartPrice.textContent = Number.isFinite(stock?.price) ? money.format(stock.price) : "—"
   if (Number.isFinite(stock?.changePercent)) {
@@ -322,17 +314,102 @@ function renderStrategySignals(signals) {
       <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>${items.length}</span></div>
       <div class="strategy-signal-list">${items.length ? items.map((signal) => {
         const at = Date.parse(signal.time)
-        const signalTime = Number.isFinite(at) ? `${axisTime.format(new Date(at))} IST` : "Time unavailable"
-        const state = signal.status || "Signal"
-        const direction = signal.pattern
-          ? `${signal.direction || "SELL"} · ${signal.pattern} · `
-          : signal.direction ? `${signal.direction} · ` : ""
-        return `<button type="button" class="strategy-signal-row" data-symbol="${escapeHtml(signal.symbol)}">
-          <span class="strategy-signal-copy"><strong>${escapeHtml(signal.symbol)}</strong><small>${direction}${signalTime} · ${money.format(signal.price)}</small></span>
-          <span class="strategy-signal-state" data-state="${escapeHtml(state.toLowerCase().replaceAll(" ", "-"))}">${escapeHtml(state)}</span>
-        </button>`
+        const signalTime = Number.isFinite(at) ? `${radarDateTime.format(new Date(at))} IST` : "Time unavailable"
+        const direction = String(signal.direction || "BUY").toUpperCase()
+        const active = signal.status === "Active" && Boolean(signal.id)
+        const disabled = active ? "" : " disabled"
+        const buttonTitle = active ? `Place ${direction} cash order` : String(signal.status || "Signal unavailable")
+        return `<div class="strategy-signal-row">
+          <button type="button" class="strategy-signal-copy" data-symbol="${escapeHtml(signal.symbol)}" aria-label="Open ${escapeHtml(signal.symbol)} chart">
+            <strong>${escapeHtml(signal.symbol)}</strong><time datetime="${escapeHtml(signal.time)}">${escapeHtml(signalTime)}</time>
+          </button>
+          <button type="button" class="strategy-order-button" data-side="${escapeHtml(direction)}" data-radar-order="${escapeHtml(signal.id || "")}" data-symbol="${escapeHtml(signal.symbol)}" title="${escapeHtml(buttonTitle)}"${disabled}>${escapeHtml(direction)}</button>
+        </div>`
       }).join("") : `<p class="strategy-empty">Waiting for signal</p>`}</div>
     </section>`).join("")
+}
+
+function radarSignalId(signal) {
+  return signal.id || `${signal.strategy || "strategy"}:${signal.symbol || "stock"}:${signal.time || "time"}`
+}
+
+function notifyNewRadarSignals(signals) {
+  if (!radarSignalsInitialized) {
+    for (const signal of signals) knownRadarSignalIds.add(radarSignalId(signal))
+    radarSignalsInitialized = true
+    return
+  }
+  for (const signal of signals) {
+    const id = radarSignalId(signal)
+    if (knownRadarSignalIds.has(id)) continue
+    knownRadarSignalIds.add(id)
+    if (signal.status !== "Active" || !("Notification" in window) || Notification.permission !== "granted") continue
+    const direction = String(signal.direction || "BUY").toUpperCase()
+    const at = Date.parse(signal.time)
+    const signalTime = Number.isFinite(at) ? `${radarDateTime.format(new Date(at))} IST` : "Now"
+    const notification = new Notification(`${direction} ${signal.symbol}`, {
+      body: `${signal.strategy || "Strategy Radar"}\n${signalTime}`,
+      tag: `strategy-radar:${id}`,
+      renotify: true,
+      requireInteraction: true,
+    })
+    notification.onclick = () => {
+      window.focus()
+      void selectStock(signal.symbol)
+      notification.close()
+    }
+  }
+}
+
+function updateRadarAlertButton() {
+  const supported = "Notification" in window
+  const permission = supported ? Notification.permission : "unsupported"
+  elements.radarAlertButton.dataset.state = permission
+  elements.radarAlertButton.textContent = permission === "granted" ? "Alerts on"
+    : permission === "denied" ? "Alerts blocked" : permission === "unsupported" ? "Alerts unavailable" : "Enable alerts"
+  elements.radarAlertButton.setAttribute("aria-pressed", String(permission === "granted"))
+}
+
+async function enableRadarNotifications() {
+  if (!("Notification" in window)) {
+    showToast("Windows notifications are unavailable in this browser.", "error")
+    return
+  }
+  let permission = Notification.permission
+  if (permission === "default") permission = await Notification.requestPermission()
+  updateRadarAlertButton()
+  if (permission === "granted") {
+    new Notification("Strategy Radar alerts enabled", { body: "New live signals will appear as Windows notifications." })
+    showToast("Strategy Radar Windows notifications enabled.", "success")
+  } else {
+    showToast("Allow notifications for this site in the browser settings.", "error")
+  }
+}
+
+async function placeRadarCashOrder(button) {
+  if (button.disabled) return
+  const signalId = button.dataset.radarOrder
+  const symbol = button.dataset.symbol
+  const direction = button.dataset.side || "BUY"
+  if (!window.confirm(`Place live cash ${direction} order for ${symbol}?`)) return
+  const previousLabel = button.textContent
+  button.disabled = true
+  button.textContent = "QUEUING…"
+  try {
+    const response = await fetch("/api/control/radar-cash-order", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ signalId }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.ok) throw new Error(payload.message || "Cash order could not be queued.")
+    button.textContent = "QUEUED"
+    showToast(payload.message || `${direction} cash order queued for ${symbol}.`)
+  } catch (error) {
+    button.disabled = false
+    button.textContent = previousLabel
+    showToast(error.message, "error")
+  }
 }
 
 function drawChart() {
@@ -425,4 +502,6 @@ function updateClock() {
 
 updateClock()
 setInterval(updateClock, 1000)
+updateRadarAlertButton()
+void selectStock(NIFTY50_SYMBOL)
 refreshControlStatus().catch(() => {})
