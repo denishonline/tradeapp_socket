@@ -74,6 +74,7 @@ export async function createTradingRuntime({ rootDirectory, constants, config, h
       observe, reset, ready: () => { connected = true }, optionContracts: metadata.contracts,
       status: () => ({ metadataError, metadataDay: metadata.metadataDay, ...execution.status(), detector: detector.status() }),
       rankings: () => detector.rankings(5),
+      brokerPositions: () => broker.positions(),
       placeCashOrder,
       async close() {
         closing = true

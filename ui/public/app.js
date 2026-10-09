@@ -4,6 +4,7 @@ const elements = Object.fromEntries([
   "historyLabel", "serverLabel", "serverActionLabel", "orderMode", "strategySignalGroups",
   "captureServerStatus", "captureServerMessage", "captureDepthStatus", "captureDepthMessage",
   "captureCandleStatus", "captureCandleMessage",
+  "positionsTotal", "positionsSummary", "positionsList",
   "chartSymbol", "chartPrice", "chartChange", "chartSubtitle", "chartWrap", "candleChart",
   "chartEmpty", "databaseSize", "liveTime", "toast",
 ].map((id) => [id, document.querySelector(`#${id}`)]))
@@ -18,6 +19,8 @@ let chartRequest = 0
 let toastTimer
 let startRequestPending = false
 let startTimeout = null
+let niftyRequestPending = false
+let positionsRequestPending = false
 let radarSignalsInitialized = false
 const knownRadarSignalIds = new Set()
 
@@ -85,6 +88,10 @@ elements.strategySignalGroups.addEventListener("click", (event) => {
   const button = event.target.closest("[data-symbol]")
   if (button) selectStock(button.dataset.symbol)
 })
+elements.positionsList.addEventListener("click", (event) => {
+  const row = event.target.closest("[data-position-symbol]")
+  if (row && stocks.has(row.dataset.positionSymbol)) void selectStock(row.dataset.positionSymbol)
+})
 elements.autoLoginButton.addEventListener("click", () => runControl("/api/control/autologin", elements.autoLoginButton, "AutoLogin started"))
 elements.preCandlesButton.addEventListener("click", () => runControl("/api/control/pre-candles", elements.preCandlesButton, "Historical candle fetch started"))
 elements.startServerButton.addEventListener("click", () => {
@@ -96,19 +103,10 @@ elements.startServerButton.addEventListener("click", () => {
 
   startRequestPending = true
   clearTimeout(startTimeout)
-  startTimeout = setTimeout(() => {
-    if (!startRequestPending) return
-    startRequestPending = false
-    startTimeout = null
-    showToast("Market feed did not connect within 60 seconds. Startup was stopped; check the FYERS session and try again.", "error")
-    applyControlStatus(control || {})
-    runControl("/api/control/stop", elements.startServerButton, "Market server stopped after startup timeout")
-  }, 60_000)
+  startTimeout = null
   applyControlStatus(control || {})
   runControl("/api/control/start", elements.startServerButton, "Market server is starting")
-    .then((succeeded) => {
-      if (!succeeded) finishStartAttempt()
-    })
+    .then(() => finishStartAttempt())
 })
 new ResizeObserver(drawChart).observe(elements.chartWrap)
 
@@ -142,6 +140,7 @@ async function refreshControlStatus() {
 }
 
 function applyControlStatus(next) {
+  const tokenWasPresent = Boolean(control?.auth?.tokenPresent)
   control = { ...(control || {}), ...next }
   const auth = control.auth || {}
   const history = control.history || {}
@@ -155,7 +154,7 @@ function applyControlStatus(next) {
   }
   const serverRunning = ["armed", "connecting", "live", "reconnecting"].includes(server.state)
   const serverTransitioning = startRequestPending || ["starting", "stopping"].includes(server.state)
-  const serverStarting = startRequestPending || ["starting", "connecting"].includes(server.state)
+  const serverStarting = startRequestPending || server.state === "starting"
   elements.authLabel.textContent = auth.state === "running"
     ? `${auth.step || 0}/${auth.total || 5} · ${auth.message}`
     : auth.tokenPresent ? "Token saved" : "Session required"
@@ -174,7 +173,7 @@ function applyControlStatus(next) {
   elements.autoLoginButton.disabled = auth.state === "running" || serverRunning || serverTransitioning
   elements.preCandlesButton.disabled = !auth.tokenPresent || history.state === "running"
   elements.startServerButton.disabled = serverTransitioning || (!auth.tokenPresent && !serverRunning)
-  elements.serverActionLabel.textContent = server.state === "armed" || server.state === "live" || (server.state === "reconnecting" && !startRequestPending)
+  elements.serverActionLabel.textContent = serverRunning && !serverTransitioning && !startRequestPending
     ? "Stop Server"
     : server.state === "stopping" ? "Stopping..." : serverStarting ? "Starting..." : "Start Server"
   elements.startServerButton.classList.toggle("is-live", server.state === "armed" || server.state === "live")
@@ -193,6 +192,9 @@ function applyControlStatus(next) {
         ? "Startup issue; retrying the FYERS connection..."
         : server.message,
     )
+  }
+  if (!tokenWasPresent && auth.tokenPresent && selectedSymbol === NIFTY50_SYMBOL && !candles.length) {
+    void selectStock(NIFTY50_SYMBOL)
   }
 }
 
@@ -216,7 +218,62 @@ function formatBytes(bytes) {
   return `${size.toFixed(2)} ${units[unit]}`
 }
 
+function formatPositionMoney(value) {
+  if (!Number.isFinite(Number(value))) return "—"
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    signDisplay: "always",
+  }).format(Number(value))
+}
+
+function renderPositions(payload) {
+  const positions = Array.isArray(payload?.positions) ? payload.positions : []
+  const totalProfit = Number(payload?.totalProfit) || 0
+  elements.positionsTotal.textContent = formatPositionMoney(totalProfit)
+  elements.positionsTotal.className = totalProfit >= 0 ? "positive" : "negative"
+  elements.positionsSummary.textContent = `${positions.length} open · updated ${time.format(new Date(payload.updatedAt || Date.now()))}`
+  if (!positions.length) {
+    elements.positionsList.innerHTML = '<p class="positions-empty">No open positions</p>'
+    return
+  }
+  elements.positionsList.innerHTML = positions.map((position) => {
+    const stock = String(position.stock || position.symbol || "Unknown")
+    const profit = Number(position.profit) || 0
+    const chartable = stocks.has(stock)
+    const tag = chartable ? "button" : "div"
+    const symbolAttribute = chartable ? ` data-position-symbol="${escapeHtml(stock)}" type="button"` : ""
+    const side = Number(position.quantity) < 0 ? "SELL" : "BUY"
+    return `<${tag} class="position-row"${symbolAttribute}>
+      <span class="position-copy"><strong>${escapeHtml(stock)}</strong><small class="position-side" data-side="${escapeHtml(side)}">${escapeHtml(side)}</small></span>
+      <span class="position-profit ${profit >= 0 ? "positive" : "negative"}">${escapeHtml(formatPositionMoney(profit))}</span>
+    </${tag}>`
+  }).join("")
+}
+
+async function refreshPositions() {
+  if (positionsRequestPending) return
+  if (!control?.auth?.tokenPresent) {
+    elements.positionsSummary.textContent = "AutoLogin required"
+    return
+  }
+  positionsRequestPending = true
+  try {
+    const response = await fetch("/api/positions", { headers: { Accept: "application/json" }, cache: "no-store" })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.ok) throw new Error(payload.message || "Unable to load positions")
+    renderPositions(payload)
+  } catch (error) {
+    elements.positionsSummary.textContent = error.message
+  } finally {
+    positionsRequestPending = false
+  }
+}
+
 function setFeedStatus(state, message) {
+  if (!elements.connectionChip || !elements.connectionText) return
   elements.connectionChip.dataset.state = state
   elements.connectionText.textContent = message || state
 }
@@ -224,15 +281,20 @@ function setFeedStatus(state, message) {
 async function selectStock(symbol) {
   const nifty50 = symbol === NIFTY50_SYMBOL
   if (!nifty50 && !stocks.has(symbol)) return
+  if (nifty50 && niftyRequestPending) return
+  const symbolChanged = selectedSymbol !== symbol
   selectedSymbol = symbol
-  if (nifty50) candles = []
+  if (nifty50 && symbolChanged) candles = []
   elements.chartSymbol.textContent = symbol
-  elements.chartSubtitle.textContent = nifty50 ? "Loading NIFTY 50 candles..." : "Loading stored candles..."
-  elements.chartEmpty.textContent = "Loading candles..."
-  elements.chartEmpty.hidden = false
+  if (symbolChanged || !candles.length) {
+    elements.chartSubtitle.textContent = nifty50 ? "Loading NIFTY 50 candles..." : "Loading stored candles..."
+    elements.chartEmpty.textContent = "Loading candles..."
+    elements.chartEmpty.hidden = false
+  }
   elements.niftyChartButton.disabled = nifty50
   paintSelectedQuote()
   const request = ++chartRequest
+  if (nifty50) niftyRequestPending = true
   try {
     const response = await fetch(`/api/candles/${encodeURIComponent(symbol)}?limit=360`)
     const result = await response.json()
@@ -256,6 +318,7 @@ async function selectStock(symbol) {
     elements.chartEmpty.hidden = false
     drawChart()
   } finally {
+    if (nifty50) niftyRequestPending = false
     if (request === chartRequest) elements.niftyChartButton.disabled = false
   }
 }
@@ -315,7 +378,7 @@ function renderStrategySignals(signals) {
       <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>${items.length}</span></div>
       <div class="strategy-signal-list">${items.length ? items.map((signal) => {
         const at = Date.parse(signal.time)
-        const signalTime = Number.isFinite(at) ? `${radarDateTime.format(new Date(at))} IST` : "Time unavailable"
+        const signalTime = Number.isFinite(at) ? radarDateTime.format(new Date(at)) : "Time unavailable"
         const direction = String(signal.direction || "BUY").toUpperCase()
         const active = signal.status === "Active" && Boolean(signal.id)
         const disabled = active ? "" : " disabled"
@@ -347,7 +410,7 @@ function notifyNewRadarSignals(signals) {
     if (signal.status !== "Active" || !("Notification" in window) || Notification.permission !== "granted") continue
     const direction = String(signal.direction || "BUY").toUpperCase()
     const at = Date.parse(signal.time)
-    const signalTime = Number.isFinite(at) ? `${radarDateTime.format(new Date(at))} IST` : "Now"
+    const signalTime = Number.isFinite(at) ? radarDateTime.format(new Date(at)) : "Now"
     const notification = new Notification(`${direction} ${signal.symbol}`, {
       body: `${signal.strategy || "Strategy Radar"}\n${signalTime}`,
       tag: `strategy-radar:${id}`,
@@ -505,4 +568,9 @@ updateClock()
 setInterval(updateClock, 1000)
 updateRadarAlertButton()
 void selectStock(NIFTY50_SYMBOL)
+setInterval(() => {
+  if (selectedSymbol === NIFTY50_SYMBOL) void selectStock(NIFTY50_SYMBOL)
+}, 60_000)
 refreshControlStatus().catch(() => {})
+void refreshPositions()
+setInterval(refreshPositions, 3_000)

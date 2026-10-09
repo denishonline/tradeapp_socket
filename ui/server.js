@@ -16,6 +16,7 @@ import { createMarketHistory } from "./market-history.js"
 import { createMarketDepthHistory } from "./market-depth-history.js"
 import { marketDepthSession } from "./market-depth.js"
 import { createTradingRuntime } from "./trading/runtime.js"
+import { createBroker } from "./trading/broker.js"
 import { createPersistentBidBreakout } from "./persistent-bid-breakout.js"
 import { createEarlyDepthBreakout } from "./early-depth-breakout.js"
 import { createBidSupportBreakout } from "./bid-support-breakout.js"
@@ -64,6 +65,7 @@ const candles = await createCandleStore({
   symbols: stocks,
 })
 const app = express()
+globalThis.__tradeappErrorLog?.attachRoutes(app);
 const httpServer = createServer(app)
 const io = new SocketServer(httpServer, {
   serveClient: true,
@@ -156,6 +158,8 @@ const candleBuilder = createLiveCandleBuilder({
 let feed = null
 let trading = null
 let startPromise = null
+let positionsBroker = null
+let positionsBrokerToken = null
 const candleCapture = { priceTicks: 0, candleUpdates: 0, lastPriceAt: null, error: null }
 let engineStatus = state("stopped", "Market stream is stopped. Use Start Server when ready.")
 let authStatus = state(hasToken() ? "ready" : "required", hasToken() ? "Saved FYERS token found" : "AutoLogin required")
@@ -186,6 +190,48 @@ function accessToken() {
 
 function hasToken() {
   return Boolean(accessToken())
+}
+
+function brokerForPositions() {
+  const token = accessToken()
+  if (!token) throw new Error("Run AutoLogin before loading positions.")
+  if (!positionsBroker || positionsBrokerToken !== token) {
+    positionsBroker = createBroker({
+      appId: CONSTANT.appId,
+      token,
+      timeoutMs: DEPTH_TREND.apiTimeoutMs,
+    })
+    positionsBrokerToken = token
+  }
+  return positionsBroker
+}
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === "") return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function normalizePosition(item) {
+  const symbol = String(item?.symbol || "").trim()
+  const quantity = finiteNumber(item?.netQty ?? item?.qty) || 0
+  const averagePrice = finiteNumber(item?.netAvg ?? item?.avgPrice ?? item?.buyAvg ?? item?.sellAvg)
+  const lastPrice = finiteNumber(item?.ltp ?? item?.lastTradedPrice)
+  const realizedProfit = finiteNumber(item?.realized_profit ?? item?.realizedProfit) || 0
+  const unrealizedProfit = finiteNumber(item?.unrealized_profit ?? item?.unrealizedProfit)
+  const reportedProfit = finiteNumber(item?.pl ?? item?.profit)
+  const calculatedProfit = averagePrice !== null && lastPrice !== null ? (lastPrice - averagePrice) * quantity : 0
+  const profit = reportedProfit ?? (unrealizedProfit !== null ? realizedProfit + unrealizedProfit : calculatedProfit)
+  return {
+    symbol,
+    stock: symbol.replace(/^NSE:/, "").replace(/-EQ$/, ""),
+    quantity,
+    averagePrice,
+    lastPrice,
+    profit,
+    productType: String(item?.productType || ""),
+    side: quantity < 0 ? "SELL" : "BUY",
+  }
 }
 
 async function readNifty50Candles(limit = 360) {
@@ -253,12 +299,10 @@ function controlStatus() {
   const runningState = ["armed", "starting", "connecting", "live", "reconnecting"].includes(stream.state)
   const hasLiveSocket = stream.state === "live" && stream.connected
   const outsideSession = stream.state === "armed"
-  const depthError = outsideSession
-    ? stream.message
-    : stream.state === "error" || stream.state === "reconnecting"
+  const depthError = stream.state === "error" || stream.state === "reconnecting"
     ? stream.message
     : stream.optionDepth?.storageError || null
-  const candleError = candleCapture.error || (outsideSession || stream.state === "error" || stream.state === "reconnecting" ? stream.message : null)
+  const candleError = candleCapture.error || (stream.state === "error" || stream.state === "reconnecting" ? stream.message : null)
   return {
     auth: { ...authStatus, tokenPresent: hasToken() },
     history: preloader.status(),
@@ -273,10 +317,12 @@ function controlStatus() {
           : stream.message,
       },
       depth: {
-        state: !runningState ? (stream.state === "error" ? "error" : "stopped")
+        state: outsideSession ? "waiting"
+          : !runningState ? (stream.state === "error" ? "error" : "stopped")
           : depthError ? "error" : !hasLiveSocket ? stream.state : stream.received?.depth
             ? "receiving" : "waiting",
-        message: !runningState ? stream.message
+        message: outsideSession ? "Server ready · depth capture waits for market hours"
+          : !runningState ? stream.message
           : depthError ? depthError : !hasLiveSocket ? stream.message
             : stream.received?.depth
               ? `WebSocket receiving cash depth updates · ${stream.received.depth} stock updates · last ${stream.lastDepthAt || "unknown"}`
@@ -285,10 +331,12 @@ function controlStatus() {
         optionUpdates: stream.optionDepth?.received || 0,
       },
       candles: {
-        state: !runningState ? (stream.state === "error" ? "error" : "stopped")
+        state: outsideSession ? "waiting"
+          : !runningState ? (stream.state === "error" ? "error" : "stopped")
           : candleError ? "error" : !hasLiveSocket ? stream.state : candleCapture.priceTicks
             ? "receiving" : "waiting",
-        message: !runningState ? stream.message
+        message: outsideSession ? "Server ready · candle capture waits for market hours"
+          : !runningState ? stream.message
           : candleError ? candleError : !hasLiveSocket ? stream.message
             : candleCapture.priceTicks
               ? `WebSocket receiving stock price ticks · ${candleCapture.priceTicks} ticks · ${candleCapture.candleUpdates} candle updates`
@@ -565,6 +613,34 @@ app.post("/api/control/radar-cash-order", (request, response) => {
   }
 })
 
+app.get("/api/positions", async (_request, response) => {
+  if (!hasToken()) {
+    response.status(401).json({ ok: false, message: "Run AutoLogin before loading positions." })
+    return
+  }
+  try {
+    const result = trading?.brokerPositions
+      ? await trading.brokerPositions()
+      : await brokerForPositions().positions()
+    if (result?.s !== "ok" || !Array.isArray(result.netPositions)) {
+      throw new Error(result?.message || result?.msg || "FYERS returned no position data.")
+    }
+    const positions = result.netPositions
+      .map(normalizePosition)
+      .filter((position) => position.symbol && position.quantity !== 0)
+      .sort((left, right) => right.profit - left.profit || left.symbol.localeCompare(right.symbol))
+    response.setHeader("Cache-Control", "no-store")
+    response.json({
+      ok: true,
+      positions,
+      totalProfit: positions.reduce((total, position) => total + position.profit, 0),
+      updatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    response.status(502).json({ ok: false, message: error.message })
+  }
+})
+
 app.get("/api/candles/:symbol", async (request, response) => {
   const symbol = String(request.params.symbol || "").trim().toUpperCase()
   if (symbol === "NIFTY50") {
@@ -679,3 +755,5 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown)
 process.on("SIGTERM", shutdown)
+import "./error-log-bootstrap.cjs";
+

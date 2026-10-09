@@ -5,7 +5,7 @@
   "main": "ui/server.js",
   "scripts": {
     "start": "node ui/server.js",
-    "server": "node ui/server.js",
+    "server": "node --require ./ui/error-log-bootstrap.cjs ui/server.js",
     "server:production": "node ui/server.js",
     "test": "node --test",
     "replay:trend": "node scripts/replay-depth-trend.js",

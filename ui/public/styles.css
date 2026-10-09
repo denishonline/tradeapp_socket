@@ -85,7 +85,7 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 .mode-badge { padding: 4px 7px; border-radius: 5px; color: var(--subtle); background: rgba(87, 101, 126, .08); font-size: 7px; font-weight: 800; letter-spacing: .07em; white-space: nowrap; text-transform: uppercase; }
 .mode-badge[data-mode="live-cash"], .mode-badge[data-mode="live-options"] { color: var(--amber); }
 
-.workspace { display: grid; grid-template-columns: minmax(260px, 3fr) minmax(0, 7fr); min-width: 0; min-height: 0; flex: 1 1 auto; gap: 10px; overflow: hidden; }
+.workspace { display: grid; grid-template-columns: minmax(190px, 2fr) minmax(190px, 2fr) minmax(0, 6fr); min-width: 0; min-height: 0; flex: 1 1 auto; gap: 10px; overflow: hidden; }
 .panel { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 13px; background: rgba(255, 255, 255, .96); box-shadow: none; }
 .panel-heading { display: flex; min-height: 66px; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
 .panel h2, .panel h3, .panel p { margin: 0; }
@@ -127,9 +127,9 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 .strategy-empty { margin: 0; padding: 7px; color: var(--subtle); font-size: 8px; }
 .strategy-signal-row { display: flex; width: 100%; min-height: 43px; align-items: center; justify-content: space-between; gap: 7px; padding: 7px; border-radius: 7px; background: transparent; }
 .strategy-signal-row:hover { background: var(--blue-soft); }
-.strategy-signal-copy { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; padding: 0; border: 0; cursor: pointer; background: transparent; text-align: left; }
-.strategy-signal-copy strong { flex: 0 0 72px; overflow: hidden; font-size: 9px; text-overflow: ellipsis; }
-.strategy-signal-copy time { min-width: 0; color: var(--subtle); font-size: 8px; line-height: 1.25; }
+.strategy-signal-copy { display: grid; min-width: 0; flex: 1 1 auto; align-items: start; gap: 3px; padding: 0; border: 0; cursor: pointer; background: transparent; text-align: left; }
+.strategy-signal-copy strong { display: block; max-width: 100%; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.strategy-signal-copy time { display: block; min-width: 0; color: var(--subtle); font-size: 8px; line-height: 1.25; }
 .strategy-order-button { flex: 0 0 auto; min-width: 48px; padding: 6px 8px; border: 0; border-radius: 6px; color: #fff; background: var(--green); cursor: pointer; font-size: 8px; font-weight: 850; }
 .strategy-order-button[data-side="SELL"] { background: var(--red); }
 .strategy-order-button:disabled { color: var(--subtle); background: var(--border-soft); cursor: not-allowed; }
@@ -139,6 +139,25 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 .strategy-signal-state[data-state="paused"] { color: var(--amber); background: rgba(173, 101, 8, .1); }
 .placeholder { padding: 28px 10px; color: var(--subtle); font-size: 9px; line-height: 1.5; text-align: center; }
 .strategy-note { margin-top: auto !important; padding: 10px 13px; color: var(--subtle); font-size: 8px; line-height: 1.45; }
+
+.positions-panel { display: flex; flex-direction: column; }
+.positions-heading { min-height: 66px; }
+.positions-heading-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.positions-heading-title h2 { margin-bottom: 0; }
+.positions-heading-title strong { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.positions-heading > div { width: 100%; min-width: 0; }
+.positions-heading p { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.positions-list { min-height: 0; flex: 1 1 auto; overflow: auto; scrollbar-color: #c5cdd9 transparent; scrollbar-width: thin; }
+.positions-empty { padding: 28px 10px; color: var(--subtle); font-size: 9px; line-height: 1.5; text-align: center; }
+.position-row { display: flex; width: 100%; min-height: 52px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 11px; border: 0; border-bottom: 1px solid var(--border-soft); color: var(--text); background: transparent; text-align: left; }
+button.position-row { cursor: pointer; }
+button.position-row:hover { background: var(--blue-soft); }
+.position-copy { display: grid; min-width: 0; gap: 3px; }
+.position-copy strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.position-copy small { color: var(--subtle); font-size: 7px; white-space: nowrap; }
+.position-side[data-side="BUY"] { color: var(--green); font-weight: 800; }
+.position-side[data-side="SELL"] { color: var(--red); font-weight: 800; }
+.position-profit { flex: 0 0 auto; font-size: 9px; font-weight: 800; font-variant-numeric: tabular-nums; }
 
 .chart-panel { display: flex; flex-direction: column; }
 .chart-heading { display: flex; min-height: 82px; align-items: center; justify-content: space-between; gap: 20px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
@@ -171,7 +190,7 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 @media (max-width: 1100px) {
   .actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(150px, auto); }
   .action-button { min-width: 0; }
-  .workspace { grid-template-columns: minmax(230px, 3fr) minmax(0, 7fr); }
+  .workspace { grid-template-columns: minmax(170px, 2fr) minmax(170px, 2fr) minmax(0, 6fr); }
 }
 
 @media (max-width: 680px) {
@@ -187,7 +206,7 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
   .action-button .step { width: 20px; height: 20px; flex-basis: 20px; }
   .action-button strong { font-size: 9px; white-space: normal; }
   .action-button small { display: none; }
-  .workspace { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+  .workspace { grid-template-columns: 1fr; grid-template-rows: repeat(3, minmax(0, 1fr)); }
   .chart-panel { grid-column: auto; }
   .panel-heading { min-height: 48px; padding: 8px 10px; }
   .chart-heading { min-height: 58px; padding: 8px 10px; }
@@ -198,3 +217,16 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.capture-log-status-link::before,
+.capture-log-status-link::after {
+  display: none !important;
+  content: none !important;
+}
+
+.capture-log-status-link .status-dot,
+.capture-log-status-link .status-indicator,
+.capture-log-status-link [class*="dot"],
+.capture-log-status-link [class*="indicator"] {
+  display: none !important;
+}
+

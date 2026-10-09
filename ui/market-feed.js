@@ -33,6 +33,7 @@ export function createMarketFeed({
   let status = createStatus("stopped", "Market stream is stopped")
 
   function publishStatus(state, message) {
+    globalThis.__tradeappErrorLog?.markFeedStatus(state, { message });
     if (state !== "live") {
       onGap()
       depthStateDate = null

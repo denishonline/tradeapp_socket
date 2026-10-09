@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Capture logs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/error-logs.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">SOCKET CAPTURE</p>
+        <h1>Capture logs</h1>
+        <p id="summary" class="summary">Loading latest entries…</p>
+      </div>
+      <div class="header-actions">
+        <label class="auto-refresh"><input id="auto-refresh" type="checkbox" checked /> Auto-refresh</label>
+        <button id="refresh" type="button">Refresh now</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="filters" aria-label="Log filters">
+        <label>
+          Level
+          <select id="level-filter">
+            <option value="">All levels</option>
+            <option value="error">Errors</option>
+            <option value="warning">Warnings</option>
+            <option value="info">Info</option>
+          </select>
+        </label>
+        <label>
+          Component
+          <select id="component-filter"><option value="">All components</option></select>
+        </label>
+        <label class="search-field">
+          Search
+          <input id="search-filter" type="search" placeholder="Message, event or symbol" />
+        </label>
+        <label>
+          Entries
+          <select id="limit-filter">
+            <option value="100">100</option>
+            <option value="500" selected>500</option>
+            <option value="1000">1,000</option>
+            <option value="2000">2,000</option>
+          </select>
+        </label>
+      </section>
+
+      <section id="status" class="status" aria-live="polite"></section>
+      <section id="log-list" class="log-list" aria-label="Newest logs first"></section>
+    </main>
+
+    <template id="log-row-template">
+      <article class="log-row">
+        <div class="log-time"></div>
+        <div class="log-level"></div>
+        <div class="log-content">
+          <div class="log-heading">
+            <span class="log-component"></span>
+            <span class="log-event"></span>
+          </div>
+          <p class="log-message"></p>
+          <details>
+            <summary>Details</summary>
+            <pre></pre>
+          </details>
+        </div>
+      </article>
+    </template>
+
+    <script src="/error-logs.js" defer></script>
+  </body>
+</html>
