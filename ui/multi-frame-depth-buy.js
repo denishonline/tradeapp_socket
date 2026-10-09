@@ -114,16 +114,19 @@ function aggregateLastComplete(rows, length) {
 function branchFor(metrics) {
   if (metrics.slope50 <= 0.02 && metrics.positiveDepthShare15 <= 2 / 3 &&
       metrics.askDrift3 > 0.04 && metrics.greenVolume50 <= 0.62 &&
-      metrics.recovery50 > 1.34 && metrics.range3 <= 0.22 &&
-      metrics.return30 <= 0.91 && metrics.rsi14 < 80) return "controlled_recovery"
+      metrics.recovery50 > 1.34 && metrics.range3 <= 0.195 &&
+      metrics.return30 <= 0.91 && metrics.return15 >= 0.40 &&
+      metrics.rsi14 < 75) return "controlled_recovery"
   if (metrics.atr14 <= 0.24 && metrics.dayReturn > -0.70 &&
-      metrics.greenVolume30 <= 0.33 && metrics.pullback10 > 0.32 &&
+      metrics.dayReturn <= 0.30 && metrics.greenVolume30 <= 0.33 && metrics.pullback10 > 0.32 &&
       metrics.return3 > -0.05) return "low_volatility_pullback"
   if (metrics.slope50 <= 0.018 && metrics.atr14 > 0.24 &&
       metrics.dayReturn > -1.90 && metrics.ema5Slope10 <= 0.004 &&
-      metrics.greenVolume5 > 0.59 && metrics.depthChange15 > 0.065) return "improving_depth"
+      metrics.greenVolume5 > 0.59 && metrics.depthChange15 > 0.065 &&
+      metrics.depthMinutes >= 10 && metrics.vwapGap15 <= 0.20) return "improving_depth"
   if (metrics.atr14 > 0.24 && metrics.dayReturn <= -1.90 &&
-      metrics.top2Imbalance3 > 0.04 && metrics.pullback15 > 0.57) return "gap_recovery"
+      metrics.top2Imbalance3 > 0.04 && metrics.pullback15 > 0.57 &&
+      metrics.return3 > 0) return "gap_recovery"
   return null
 }
 

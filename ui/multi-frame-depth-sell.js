@@ -102,7 +102,8 @@ function branchFor(metrics) {
 
   const weakRecovery = metrics.rsi14 > 24.5 && metrics.rsi14 < 38 &&
     metrics.greenVolume50 > 0.29 && metrics.vwapGap50 > -0.45 &&
-    metrics.recovery15 > 0.40 && metrics.bidDrift15 <= -0.70
+    metrics.recovery15 > 0.40 && metrics.bidDrift15 <= -0.70 &&
+    metrics.vwapGap10 <= 0 && metrics.dayReturn <= 0
   if (weakRecovery) return "weak_recovery_falling_bid"
 
   const temporaryRecovery = metrics.rsi14 > 24.5 && metrics.greenVolume50 <= 0.30 &&
