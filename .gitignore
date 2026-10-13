@@ -11,6 +11,8 @@ db/trend-orders/
 db/option-depth/
 db/cash-depth/
 db/strategy-signals/
+db/logs/
+csv/
 
 *.log
 .DS_Store
