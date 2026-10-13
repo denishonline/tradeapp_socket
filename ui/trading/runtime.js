@@ -64,7 +64,7 @@ export async function createTradingRuntime({ rootDirectory, constants, config, h
       const queued = signals.get(signal.symbol)
       if (queued?.action === "EXIT") throw new Error("An exit is already queued for this stock.")
       if (queued?.action === "ENTRY") throw new Error("An entry is already queued for this stock.")
-      signals.set(signal.symbol, { ...signal, action: "ENTRY", kind: "cash" })
+      signals.set(signal.symbol, { ...signal, action: "ENTRY", kind: "cash", exitPlan: signal.exitPlan || null })
       cycle()
       return { symbol: signal.symbol, action: "BUY" }
     }

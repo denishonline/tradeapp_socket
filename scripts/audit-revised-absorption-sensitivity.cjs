@@ -1,0 +1,15 @@
+const fs = require('fs');
+const src='csv/2026-10-05-to-13-absorption-breakout-broad-enriched.csv';
+const [head,...lines]=fs.readFileSync(src,'utf8').trim().split(/\r?\n/); const h=head.split(',');
+const rows=lines.map(l=>Object.fromEntries(l.split(',').map((v,i)=>[h[i],v])));
+const n=(r,k)=>r[k]===''?NaN:Number(r[k]); const ok=(...v)=>v.every(Number.isFinite);
+const sum=(name, pred)=>{const a=rows.filter(pred); const by={Target:0,Stop:0,Unresolved:0}; for(const r of a)by[r.outcome]++; return {name,signals:a.length,...by,days:new Set(a.map(r=>r.date)).size};};
+const openingBase=(r)=>r.branch==='opening'; const intra=(r)=>r.branch==='intraday';
+const variants=[];
+for(const [pos,above] of [[75,15],[70,20],[65,25],[60,30]]) variants.push(sum(`opening-regime bp>=${pos} above<=${above}`,r=>{if(!openingBase(r))return false;const gap=n(r,'gapPct'),pr=n(r,'prior30ReturnPct'),de=n(r,'deltaPct'),up=n(r,'updates'),dp=n(r,'depthPricePct'),cr=n(r,'candleReturnPct'),bid=n(r,'avgBidPct'),bp=n(r,'breadthPositivePct'),ba=n(r,'breadthAbove05Pct');return ok(gap,pr,de,up,dp,cr,bid,bp,ba)&&gap>=-.1&&pr<=.25&&de<=50&&up>=12&&cr>0&&dp/cr>=.95&&bid<=50&&bp>=pos&&ba<=above;}));
+for(const [bid,ofi,gap,pr] of [[35,.25,.5,.25],[40,.2,1,.5],[45,.15,1.5,.75],[50,.1,2,1]]) variants.push(sum(`hidden bid<=${bid} ofi>=${ofi} gap<=${gap} prior<=${pr}`,r=>openingBase(r)&&n(r,'avgBidPct')<=bid&&n(r,'ofi')>=ofi&&n(r,'gapPct')<=gap&&n(r,'prior30ReturnPct')<=pr));
+for(const bp of [80,75,70,65,60]) variants.push(sum(`late breadth>=${bp}`,r=>intra(r)&&((Number(r.setupTime.slice(0,2))*60+Number(r.setupTime.slice(3,5)))>=830)&&n(r,'return3Pct')>=.13&&n(r,'candleReturnPct')<=.15&&n(r,'confirmAvgBidPct')>=51&&n(r,'confirmAvgBidPct')<=64&&n(r,'breadthPositivePct')>=bp));
+for(const [vr,lo,hi,bp,br] of [[.8,.22,.28,45,75],[1,.2,.3,40,70],[1.2,.18,.32,35,65],[1.5,.15,.35,30,60]]) variants.push(sum(`smooth vr<=${vr} mid=${lo}-${hi} bp>=${bp} br3>=${br}`,r=>intra(r)&&n(r,'volumeRatio10')<=vr&&n(r,'confirmMidReturnPct')>=lo&&n(r,'confirmMidReturnPct')<=hi&&n(r,'breadthPositivePct')>=bp&&n(r,'breadthReturn3PositivePct')>=br));
+for(const [ofi,mid,vr,bp] of [[.15,.25,1.5,45],[.1,.2,2,40],[.05,.15,2.5,35],[0,.1,3,30]]) variants.push(sum(`balanced ofi>=${ofi} mid>=${mid} vr<=${vr} bp>=${bp}`,r=>intra(r)&&n(r,'ofi')>=ofi&&n(r,'confirmMidReturnPct')>=mid&&n(r,'confirmVolumeRatio10')<=vr&&n(r,'breadthPositivePct')>=bp));
+console.table(variants);
+fs.writeFileSync('csv/2026-10-05-to-13-revised-absorption-threshold-sensitivity.json',JSON.stringify(variants,null,2)+'\n');

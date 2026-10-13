@@ -193,7 +193,13 @@ export function createBidSupportBreakout({ onUpdate = () => {}, initialSignals =
     const volumePace = ((volume - state.baselineVolume) * MINUTE / (at - depthMinute)) / candidate.baseVolume
     const spreadPct = pct(book.ask, book.bid)
     const extensionPct = pct(book.ask, candidate.breakoutHigh)
-    if (flow <= 0.1 || volumePace < 1.9 || spreadPct > 0.15 || extensionPct > 0.3) return
+    const fastVolumeFlow = flow >= 0.05 && volumePace >= 5
+    if ((flow <= 0.1 && !fastVolumeFlow) || volumePace < 1.9 ||
+        spreadPct > 0.15 || extensionPct > 0.3) return
+    const depthLedBreakout = flow >= 0.30 && volumePace >= 4
+    const broadBreakoutQuality = depthLedBreakout || fastVolumeFlow ||
+      candidate.return3Pct >= 0.15 || candidate.volume5Ratio >= 0.50
+    if (candidate.trendPct > 1 || !broadBreakoutQuality) return
     const support = []
     for (let offset = 3; offset >= 1; offset--) {
       const minuteAt = depthMinute - offset * MINUTE

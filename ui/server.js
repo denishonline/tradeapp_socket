@@ -21,8 +21,11 @@ import { createPersistentBidBreakout } from "./persistent-bid-breakout.js"
 import { createEarlyDepthBreakout } from "./early-depth-breakout.js"
 import { createBidSupportBreakout } from "./bid-support-breakout.js"
 import { createBidRecoveryRadar } from "./bid-recovery-radar.js"
+import { createOpeningBidRecoveryRadar } from "./opening-bid-recovery.js"
 import { createMultiFrameDepthSellRadar } from "./multi-frame-depth-sell.js"
 import { createMultiFrameDepthBuyRadar } from "./multi-frame-depth-buy.js"
+import { createFailedBidAbsorptionRadar } from "./failed-bid-absorption.js"
+import { createRevisedAbsorptionBreakoutRadar } from "./revised-absorption-breakout.js"
 import { createStrategySignalStore } from "./strategy-signal-store.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -75,16 +78,24 @@ const signalStore = createStrategySignalStore(path.join(databaseDirectory, "stra
 const earlySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "early-depth-breakout"))
 const bidSupportSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "bid-support-breakout"))
 const bidRecoverySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "bid-recovery-radar"))
+const openingBidRecoverySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "opening-bid-recovery"))
 const multiFrameSellSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "multi-frame-depth-sell"))
 const multiFrameBuySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "multi-frame-depth-buy"))
+const failedBidAbsorptionSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "failed-bid-absorption"))
+const revisedAbsorptionSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "revised-absorption-breakout"))
 let earlyRadar
 let bidSupportRadar
 let bidRecoveryRadar
+let openingBidRecoveryRadar
 let multiFrameSellRadar
 let multiFrameBuyRadar
+let failedBidAbsorptionRadar
+let revisedAbsorptionRadar
 function radarSnapshot() {
   return [...strategyRadar.snapshot(), ...earlyRadar.snapshot(), ...bidSupportRadar.snapshot(),
-    ...bidRecoveryRadar.snapshot(), ...multiFrameSellRadar.snapshot(), ...multiFrameBuyRadar.snapshot()]
+    ...bidRecoveryRadar.snapshot(), ...openingBidRecoveryRadar.snapshot(),
+    ...multiFrameSellRadar.snapshot(), ...multiFrameBuyRadar.snapshot(),
+    ...failedBidAbsorptionRadar.snapshot(), ...revisedAbsorptionRadar.snapshot()]
     .sort((left, right) => Date.parse(right.time) - Date.parse(left.time))
 }
 function emitRadarSignals() {
@@ -122,6 +133,14 @@ bidRecoveryRadar = createBidRecoveryRadar({
     emitRadarSignals()
   },
 })
+openingBidRecoveryRadar = createOpeningBidRecoveryRadar({
+  initialSignals: openingBidRecoverySignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { openingBidRecoverySignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save opening bid recovery signals:", error.message) }
+    emitRadarSignals()
+  },
+})
 multiFrameSellRadar = createMultiFrameDepthSellRadar({
   initialSignals: multiFrameSellSignalStore.read(marketDepthSession().date),
   onUpdate: (signals, date) => {
@@ -138,6 +157,22 @@ multiFrameBuyRadar = createMultiFrameDepthBuyRadar({
     emitRadarSignals()
   },
 })
+failedBidAbsorptionRadar = createFailedBidAbsorptionRadar({
+  initialSignals: failedBidAbsorptionSignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { failedBidAbsorptionSignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save failed bid absorption signals:", error.message) }
+    emitRadarSignals()
+  },
+})
+revisedAbsorptionRadar = createRevisedAbsorptionBreakoutRadar({
+  initialSignals: revisedAbsorptionSignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { revisedAbsorptionSignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save revised absorption breakout signals:", error.message) }
+    emitRadarSignals()
+  },
+})
 const candleBuilder = createLiveCandleBuilder({
   store: candles,
   io,
@@ -146,8 +181,11 @@ const candleBuilder = createLiveCandleBuilder({
     earlyRadar.observeCandle(symbol, candle)
     bidSupportRadar.observeCandle(symbol, candle)
     bidRecoveryRadar.observeCandle(symbol, candle)
+    openingBidRecoveryRadar.observeCandle(symbol, candle)
     multiFrameSellRadar.observeCandle(symbol, candle)
     multiFrameBuyRadar.observeCandle(symbol, candle)
+    failedBidAbsorptionRadar.observeCandle(symbol, candle)
+    revisedAbsorptionRadar.observeCandle(symbol, candle)
   },
   onError: (symbol, error) => {
     candleCapture.error = `Candle storage error for ${symbol}: ${error.message}`
@@ -374,8 +412,11 @@ async function stopMarketEngine(message = "Market stream stopped") {
   earlyRadar.resetLiveState()
   bidSupportRadar.resetLiveState()
   bidRecoveryRadar.resetLiveState()
+  openingBidRecoveryRadar.resetLiveState()
   multiFrameSellRadar.resetLiveState()
   multiFrameBuyRadar.resetLiveState()
+  failedBidAbsorptionRadar.resetLiveState()
+  revisedAbsorptionRadar.resetLiveState()
   const currentFeed = feed
   const currentTrading = trading
   feed = null
@@ -481,8 +522,11 @@ app.post("/api/control/start", async (_request, response) => {
     await earlyRadar.seed(stocks, candles)
     await bidSupportRadar.seed(stocks, candles)
     await bidRecoveryRadar.seed(stocks, candles)
+    await openingBidRecoveryRadar.seed(stocks, candles)
     await multiFrameSellRadar.seed(stocks, candles)
     await multiFrameBuyRadar.seed(stocks, candles)
+    await failedBidAbsorptionRadar.seed(stocks, candles)
+    await revisedAbsorptionRadar.seed(stocks, candles)
     const nextTrading = await createTradingRuntime({ rootDirectory, constants: CONSTANT, config: DEPTH_TREND, history })
     const nextFeed = createMarketFeed({
       io,
@@ -498,15 +542,22 @@ app.post("/api/control/start", async (_request, response) => {
           earlyRadar.observeDepth(data, at)
           bidSupportRadar.observeDepth(data, at, marketContext)
           bidRecoveryRadar.observeDepth(data, at)
+          openingBidRecoveryRadar.observeDepth(data, at, marketContext)
           multiFrameSellRadar.observeDepth(data, at)
           multiFrameBuyRadar.observeDepth(data, at)
+          failedBidAbsorptionRadar.observeDepth(data, at, marketContext)
+          revisedAbsorptionRadar.observeDepth(data, at, marketContext)
         }
         if (kind === "price") {
           candleCapture.priceTicks++
+          strategyRadar.observePrice(data, at)
           earlyRadar.observePrice(data, at)
           bidRecoveryRadar.observePrice(data, at)
+          openingBidRecoveryRadar.observePrice(data, at)
           multiFrameSellRadar.observePrice(data, at)
           multiFrameBuyRadar.observePrice(data, at)
+          failedBidAbsorptionRadar.observePrice(data, at)
+          revisedAbsorptionRadar.observePrice(data, at)
           candleCapture.lastPriceAt = at instanceof Date ? at.toISOString() : new Date(at).toISOString()
           if (candleBuilder.observe(data, at)) candleCapture.candleUpdates++
         }
@@ -517,8 +568,11 @@ app.post("/api/control/start", async (_request, response) => {
         earlyRadar.resetLiveState()
         bidSupportRadar.resetLiveState()
         bidRecoveryRadar.resetLiveState()
+        openingBidRecoveryRadar.resetLiveState()
         multiFrameSellRadar.resetLiveState()
         multiFrameBuyRadar.resetLiveState()
+        failedBidAbsorptionRadar.resetLiveState()
+        revisedAbsorptionRadar.resetLiveState()
         candleBuilder.reset()
       },
       onReady: nextTrading.ready,
@@ -606,6 +660,7 @@ app.post("/api/control/radar-cash-order", (request, response) => {
       price: Number(signal.price),
       at: Date.parse(signal.time),
       reason: `strategy_radar:${signal.strategy}`,
+      exitPlan: signal.exitPlan,
     })
     response.status(202).json({ ok: true, message: `${queued.action} cash order queued for ${queued.symbol}.` })
   } catch (error) {
@@ -703,8 +758,11 @@ const earlyRadarTimer = setInterval(() => {
   if (feed) {
     earlyRadar.flushCompleted(Date.now())
     bidRecoveryRadar.flushCompleted(Date.now())
+    openingBidRecoveryRadar.flushCompleted(Date.now())
     multiFrameSellRadar.flushCompleted(Date.now())
     multiFrameBuyRadar.flushCompleted(Date.now())
+    failedBidAbsorptionRadar.flushCompleted(Date.now())
+    revisedAbsorptionRadar.flushCompleted(Date.now())
   }
 }, 1000)
 

@@ -38,6 +38,7 @@ export function createPersistentBidBreakout({ onUpdate = () => {}, initialSignal
   const candlesByStock = new Map()
   const booksByStock = new Map()
   const bookStateByStock = new Map()
+  const pendingByStock = new Map()
   const signals = initialSignals.slice()
   const signalIds = new Set(signals.map((signal) => signal.id))
   const usedDepthRuns = new Set(signals.map((signal) =>
@@ -52,6 +53,7 @@ export function createPersistentBidBreakout({ onUpdate = () => {}, initialSignal
     candlesByStock.clear()
     booksByStock.clear()
     bookStateByStock.clear()
+    pendingByStock.clear()
     signals.length = 0
     signalIds.clear()
     usedDepthRuns.clear()
@@ -187,10 +189,34 @@ export function createPersistentBidBreakout({ onUpdate = () => {}, initialSignal
         risingBestBid: liveDepth.risingBestBid,
       },
     }
-    signals.push(signal)
-    signalIds.add(id)
+    const candidateAt = (current.time + 60) * 1000
+    pendingByStock.set(symbol, { signal, rawPrice: entry, createdAt: candidateAt,
+      expiresAt: candidateAt + 5 * MINUTE })
     usedDepthRuns.add(runKey)
-    onUpdate(snapshot(), sessionDate)
+  }
+
+  function observePrice(data, receivedAt) {
+    if (!data || typeof data.symbol !== "string") return
+    const symbol = toStockName(data.symbol)
+    const at = receivedAt instanceof Date ? receivedAt.getTime() : Number(receivedAt)
+    const price = Number(data.ltp)
+    if (!symbol || !Number.isFinite(at) || !Number.isFinite(price) || price <= 0) return
+    const pending = pendingByStock.get(symbol)
+    if (!pending) return
+    const progressPct = (price / pending.rawPrice - 1) * 100
+    if (at > pending.expiresAt || progressPct <= -0.15) {
+      pendingByStock.delete(symbol)
+      return
+    }
+    if (progressPct < 0.05) return
+    const signal = { ...pending.signal, time: new Date(at).toISOString(), price,
+      metrics: { ...pending.signal.metrics, candidateTime: pending.signal.time,
+        candidatePrice: pending.rawPrice, confirmationPct: progressPct,
+        confirmationDelaySeconds: (at - pending.createdAt) / 1000 } }
+    pendingByStock.delete(symbol)
+    signals.push(signal)
+    signalIds.add(signal.id)
+    publish()
   }
 
   function resolveActive(symbol, candle) {
@@ -292,9 +318,10 @@ export function createPersistentBidBreakout({ onUpdate = () => {}, initialSignal
     return rows
   }
 
-  return { observeDepth, observeCandle, seed, snapshot, resetLiveState: () => {
+  return { observeDepth, observeCandle, observePrice, seed, snapshot, resetLiveState: () => {
     booksByStock.clear()
     bookStateByStock.clear()
+    pendingByStock.clear()
   } }
 }
 

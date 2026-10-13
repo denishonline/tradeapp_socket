@@ -103,7 +103,8 @@ function branchFor(metrics) {
   const weakRecovery = metrics.rsi14 > 24.5 && metrics.rsi14 < 38 &&
     metrics.greenVolume50 > 0.29 && metrics.vwapGap50 > -0.45 &&
     metrics.recovery15 > 0.40 && metrics.bidDrift15 <= -0.70 &&
-    metrics.vwapGap10 <= 0 && metrics.dayReturn <= 0
+    metrics.recovery15 <= 0.65 &&
+    (metrics.vwapGap10 <= 0.20 || metrics.greenVolume15 >= 0.45)
   if (weakRecovery) return "weak_recovery_falling_bid"
 
   const temporaryRecovery = metrics.rsi14 > 24.5 && metrics.greenVolume50 <= 0.30 &&
@@ -119,6 +120,7 @@ export function createMultiFrameDepthSellRadar({
   const depthByStock = new Map()
   const booksByStock = new Map()
   const evaluatedByStock = new Map()
+  const pendingByStock = new Map()
   const signals = initialSignals.slice()
   const signalIds = new Set(signals.map((signal) => signal.id))
   const usedStock = new Set(signals.map((signal) => signal.symbol))
@@ -133,6 +135,7 @@ export function createMultiFrameDepthSellRadar({
     depthByStock.clear()
     booksByStock.clear()
     evaluatedByStock.clear()
+    pendingByStock.clear()
     signals.length = 0
     signalIds.clear()
     usedStock.clear()
@@ -234,6 +237,21 @@ export function createMultiFrameDepthSellRadar({
     const at = receivedAt instanceof Date ? receivedAt.getTime() : Number(receivedAt)
     const price = Number(data.ltp)
     if (!symbol || !Number.isFinite(at) || !Number.isFinite(price) || price <= 0) return
+    const pending = pendingByStock.get(symbol)
+    if (pending) {
+      const progressPct = -pct(price, pending.rawPrice)
+      if (at > pending.expiresAt || progressPct <= -0.40) pendingByStock.delete(symbol)
+      else if (progressPct >= 0.20) {
+        const signal = { ...pending.signal, time: new Date(at).toISOString(), price,
+          metrics: { ...pending.signal.metrics, candidateTime: pending.signal.time,
+            candidatePrice: pending.rawPrice, confirmationPct: progressPct,
+            confirmationDelaySeconds: (at - pending.createdAt) / 1000 } }
+        pendingByStock.delete(symbol)
+        signals.push(signal)
+        signalIds.add(signal.id)
+        publish()
+      }
+    }
     const active = signals.find((signal) => signal.symbol === symbol && signal.status === "Active")
     if (!active || at <= Date.parse(active.time)) return
     if (price >= active.stop) active.status = "Stopped"
@@ -301,6 +319,8 @@ export function createMultiFrameDepthSellRadar({
     }
     const branch = branchFor(metrics)
     if (!branch) return
+    const ist = new Date(at + IST_OFFSET)
+    if (ist.getUTCHours() * 60 + ist.getUTCMinutes() > 14 * 60 + 30) return
 
     const quote = booksByStock.get(symbol)
     const entry = quote?.book?.bid
@@ -326,10 +346,9 @@ export function createMultiFrameDepthSellRadar({
       candleMinute: last.time,
       metrics: { ...metrics, filterBranch: branch },
     }
-    signals.push(signal)
-    signalIds.add(id)
+    pendingByStock.set(symbol, { signal, rawPrice: entry, createdAt: at,
+      expiresAt: at + 10 * MINUTE })
     usedStock.add(symbol)
-    publish()
   }
 
   function flushCompleted(timestamp = now()) {
@@ -354,6 +373,7 @@ export function createMultiFrameDepthSellRadar({
     depthByStock.clear()
     booksByStock.clear()
     evaluatedByStock.clear()
+    pendingByStock.clear()
   }
 
   return {

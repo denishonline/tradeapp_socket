@@ -22,6 +22,20 @@ export function createExecution({ constants, config = {}, broker, journal, contr
   let busy = false
   let lastError = null
   const id = () => randomUUID()
+  function normalizeExitPlan(value) {
+    if (value?.type !== "armed_trailing") return null
+    const plan = {
+      type: value.type,
+      initialStopFraction: Number(value.initialStopFraction),
+      armFraction: Number(value.armFraction),
+      lockFraction: Number(value.lockFraction),
+      trailingFraction: Number(value.trailingFraction),
+    }
+    return plan.initialStopFraction > 0 && plan.initialStopFraction <= 0.05 &&
+      plan.armFraction > 0 && plan.armFraction <= 0.20 &&
+      plan.lockFraction >= 0 && plan.lockFraction < plan.armFraction &&
+      plan.trailingFraction > 0 && plan.trailingFraction <= 0.20 ? plan : null
+  }
   function commit(event) { journal.save(event, state) }
   function block(message) {
     if (fault === message) return
@@ -52,7 +66,7 @@ export function createExecution({ constants, config = {}, broker, journal, contr
     state.daily[day] ??= 0
     state.daily[day] -= qty * price * c.estimatedCostRate
     if (order.side === 1) {
-      state.positions.push({ id: order.positionId, underlying: order.underlying, symbol: order.symbol, kind: order.kind, live: order.live, qty, entry: price, peak: price, openedAt: now, tick: order.tick, lot: order.lot, exitReason: null, retryAt: 0 })
+      state.positions.push({ id: order.positionId, underlying: order.underlying, symbol: order.symbol, kind: order.kind, live: order.live, qty, entry: price, peak: price, openedAt: now, tick: order.tick, lot: order.lot, exitReason: null, retryAt: 0, exitPlan: order.exitPlan || null, trailArmed: false })
     } else {
       const p = state.positions.find((p) => p.id === order.positionId)
       if (!p || qty > p.qty) throw new Error("Exit fill exceeds owned position; reconcile broker")
@@ -66,7 +80,7 @@ export function createExecution({ constants, config = {}, broker, journal, contr
     }
   }
 
-  async function submit({ underlying, symbol, kind, live, qty, side, tick, lot = 1, book, reason, positionId = id() }) {
+  async function submit({ underlying, symbol, kind, live, qty, side, tick, lot = 1, book, reason, exitPlan = null, positionId = id() }) {
     const now = clock()
     if (side === 1 && (!canEnter() || fault)) return false
     if (!fresh(book, now)) return false
@@ -77,7 +91,7 @@ export function createExecution({ constants, config = {}, broker, journal, contr
     const limit = Number(((side === 1 ? Math.ceil(quote.worst / tick - 1e-8) : Math.floor(quote.worst / tick + 1e-8)) * tick).toFixed(8))
     if (!(limit > 0)) return false
     if (side === 1 && qty * limit * (1 + c.estimatedCostRate) > Math.min(c.capitalPerTrade, available())) return false
-    const order = { id: id(), positionId, underlying, symbol, kind, live, qty, side, tick, lot, limit, at: now, reason, brokerId: null, phase: "INTENT" }
+    const order = { id: id(), positionId, underlying, symbol, kind, live, qty, side, tick, lot, limit, at: now, reason, exitPlan, brokerId: null, phase: "INTENT" }
     state.pending.push(order)
     commit({ type: "ORDER_INTENT", order }) // durable BEFORE network submission
     if (!live) {
@@ -216,7 +230,7 @@ export function createExecution({ constants, config = {}, broker, journal, contr
       const qty = kind === "cash" ? Math.floor(budget / book.asks[0].price) : lot * constants.lot
       const quote = sweep(book.asks, qty)
       if (!Number.isInteger(qty) || qty <= 0 || quote.qty !== qty || qty * quote.worst > budget) { commit({ type: "ENTRY_SKIPPED", symbol, kind, reason: "Insufficient capital or displayed depth for requested quantity" }); continue }
-      await submit({ underlying: signal.symbol, symbol, kind, live, qty, side: 1, tick, lot, book, reason: signal.reason })
+      await submit({ underlying: signal.symbol, symbol, kind, live, qty, side: 1, tick, lot, book, reason: signal.reason, exitPlan: normalizeExitPlan(signal.exitPlan) })
     }
   }
 
@@ -238,13 +252,28 @@ export function createExecution({ constants, config = {}, broker, journal, contr
       const quote = sweep(book.bids, p.qty)
       if (!quote.qty) continue
       p.peak = Math.max(p.peak, quote.average)
-      const stop = p.kind === "cash" ? constants.sl : constants.optionSL
-      const trail = p.kind === "cash" ? c.trailingFraction : c.optionTrailingFraction
-      if (quote.average <= p.entry * (1 - stop)) p.exitReason = "stop_loss"
-      else if (quote.average <= p.peak * (1 - trail)) p.exitReason = "trailing_exit"
-      else if (indiaTime(now).minute >= c.squareOffMinute || indiaTime(now).day !== indiaTime(p.openedAt).day) p.exitReason = "session_exit"
-      else if (pnl(now) <= constants.maxLoss) p.exitReason = "daily_loss_limit"
-      else if (signals.some((s) => s.symbol === p.underlying && s.action === "EXIT")) p.exitReason = "trend_weakness"
+      const strategyExit = p.kind === "cash" ? normalizeExitPlan(p.exitPlan) : null
+      if (strategyExit) {
+        if (!p.trailArmed && p.peak >= p.entry * (1 + strategyExit.armFraction)) p.trailArmed = true
+        if (!p.trailArmed && quote.average <= p.entry * (1 - strategyExit.initialStopFraction)) {
+          p.exitReason = "stop_loss"
+        } else if (p.trailArmed) {
+          const trailingStop = Math.max(
+            p.entry * (1 + strategyExit.lockFraction),
+            p.peak * (1 - strategyExit.trailingFraction),
+          )
+          if (quote.average <= trailingStop) p.exitReason = "armed_trailing_exit"
+        }
+      } else {
+        const stop = p.kind === "cash" ? constants.sl : constants.optionSL
+        const trail = p.kind === "cash" ? c.trailingFraction : c.optionTrailingFraction
+        if (quote.average <= p.entry * (1 - stop)) p.exitReason = "stop_loss"
+        else if (quote.average <= p.peak * (1 - trail)) p.exitReason = "trailing_exit"
+      }
+      if (!p.exitReason && (indiaTime(now).minute >= c.squareOffMinute ||
+          indiaTime(now).day !== indiaTime(p.openedAt).day)) p.exitReason = "session_exit"
+      else if (!p.exitReason && pnl(now) <= constants.maxLoss) p.exitReason = "daily_loss_limit"
+      else if (!p.exitReason && signals.some((s) => s.symbol === p.underlying && s.action === "EXIT")) p.exitReason = "trend_weakness"
       if (!p.exitReason) continue
       commit({ type: "EXIT_SIGNAL", positionId: p.id, reason: p.exitReason })
       if (p.live) {
