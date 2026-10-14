@@ -1,5 +1,6 @@
 import { depthUpdateFields } from "./market-depth.js"
 import { toStockName } from "./market-data.js"
+import { passesRevisedAbsorptionQuality } from "./strategy-quality-gates.js"
 
 const MINUTE = 60_000
 const IST_OFFSET = 330 * MINUTE
@@ -303,6 +304,19 @@ export function createRevisedAbsorptionBreakoutRadar({
     const id = `${symbol}:${Math.floor(signalMinute / 1000)}:revised-absorption-breakout`
     if (signalIds.has(id)) return false
     const entry = quote.ask
+    const metrics = {
+      candleReturnPct: context.candleReturnPct, return3Pct: context.return3Pct,
+      return10Pct: context.return10Pct, return30Pct: context.return30Pct,
+      vwapGapPct: context.vwapGapPct, volumeRatio10: context.volumeRatio10,
+      depthUpdates: depth.updates, avgBidPct: depth.avgBidPct,
+      bidDominantPct: depth.bidDominantPct, ofi: depth.ofi,
+      deltaPct: depth.deltaPct, midReturnPct: depth.midReturnPct,
+      breadthStocks: breadth.stocks, breadthPositivePct: breadth.positivePct,
+      breadthAbove05Pct: breadth.above05Pct,
+      breadthReturn3PositivePct: breadth.return3PositivePct,
+      ...extra,
+    }
+    if (!passesRevisedAbsorptionQuality(pattern, metrics)) return false
     const signal = {
       id, strategy: "Revised Absorption Breakout", symbol, direction: "BUY", pattern,
       time: new Date(currentAt).toISOString(), price: entry,
@@ -314,18 +328,7 @@ export function createRevisedAbsorptionBreakoutRadar({
         armFraction: TRAIL_ARM_PCT / 100, lockFraction: TRAIL_LOCK_PCT / 100,
         trailingFraction: TRAIL_DISTANCE_PCT / 100,
       },
-      metrics: {
-        candleReturnPct: context.candleReturnPct, return3Pct: context.return3Pct,
-        return10Pct: context.return10Pct, return30Pct: context.return30Pct,
-        vwapGapPct: context.vwapGapPct, volumeRatio10: context.volumeRatio10,
-        depthUpdates: depth.updates, avgBidPct: depth.avgBidPct,
-        bidDominantPct: depth.bidDominantPct, ofi: depth.ofi,
-        deltaPct: depth.deltaPct, midReturnPct: depth.midReturnPct,
-        breadthStocks: breadth.stocks, breadthPositivePct: breadth.positivePct,
-        breadthAbove05Pct: breadth.above05Pct,
-        breadthReturn3PositivePct: breadth.return3PositivePct,
-        ...extra,
-      },
+      metrics,
     }
     signals.push(signal)
     signalIds.add(id)

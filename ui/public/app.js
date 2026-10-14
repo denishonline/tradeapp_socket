@@ -584,11 +584,28 @@ function renderStrategySignals(signals) {
                 const buttonTitle = active
                   ? `Place ${direction} cash order`
                   : String(signal.status || "Signal unavailable")
+                const entry = Number(signal.price)
+                const status = String(signal.status || "").toLowerCase()
+                const fallbackExit = status === "target reached"
+                  ? Number(signal.target)
+                  : status === "stopped" ? Number(signal.stop) : NaN
+                const recordedExit = Number(signal.exitPrice)
+                const exit = Number.isFinite(recordedExit) && recordedExit > 0
+                  ? recordedExit : fallbackExit
+                const signalReturn = entry > 0 && exit > 0 && !active
+                  ? (direction === "SELL" ? 1 - exit / entry : exit / entry - 1) * 100
+                  : NaN
+                const returnMarkup = Number.isFinite(signalReturn)
+                  ? `<span class="strategy-signal-return" data-result="${signalReturn >= 0 ? "profit" : "loss"}">${signalReturn >= 0 ? "+" : ""}${signalReturn.toFixed(2)}%</span>`
+                  : ""
                 return `<div class="strategy-signal-row">
           <button type="button" class="strategy-signal-copy" data-symbol="${escapeHtml(signal.symbol)}" aria-label="Open ${escapeHtml(signal.symbol)} chart">
             <strong>${escapeHtml(signal.symbol)}</strong><time datetime="${escapeHtml(signal.time)}">${escapeHtml(signalTime)}</time>
           </button>
-          <button type="button" class="strategy-order-button" data-side="${escapeHtml(direction)}" data-radar-order="${escapeHtml(signal.id || "")}" data-symbol="${escapeHtml(signal.symbol)}" title="${escapeHtml(buttonTitle)}"${disabled}>${escapeHtml(direction)}</button>
+          <div class="strategy-order-wrap">
+            <button type="button" class="strategy-order-button" data-side="${escapeHtml(direction)}" data-radar-order="${escapeHtml(signal.id || "")}" data-symbol="${escapeHtml(signal.symbol)}" title="${escapeHtml(buttonTitle)}"${disabled}>${escapeHtml(direction)}</button>
+            ${returnMarkup}
+          </div>
         </div>`
               })
               .join("")

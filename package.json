@@ -16,6 +16,7 @@
     "discover:depth-leads": "node scripts/discover-cash-depth-leads.js",
     "scan:depth:momentum": "node scripts/scan-cash-depth-momentum.js",
     "scan:depth:1000": "node scripts/rank-previous-1000-depth-candles.js",
+    "scan:depth:opening-record": "node scripts/scan-opening-bid-confirmation.js",
     "scan:depth:continuation": "node scripts/scan-cash-depth-momentum.js --continuation",
     "scan:depth:continuation:sell": "node scripts/scan-cash-depth-momentum.js --continuation --short",
     "scan:depth:short-patterns": "node scripts/scan-short-depth-patterns.js",

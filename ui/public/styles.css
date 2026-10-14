@@ -130,9 +130,13 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 .strategy-signal-copy { display: grid; min-width: 0; flex: 1 1 auto; align-items: start; gap: 3px; padding: 0; border: 0; cursor: pointer; background: transparent; text-align: left; }
 .strategy-signal-copy strong { display: block; max-width: 100%; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .strategy-signal-copy time { display: block; min-width: 0; color: var(--subtle); font-size: 8px; line-height: 1.25; }
+.strategy-order-wrap { display: grid; flex: 0 0 auto; justify-items: center; gap: 3px; }
 .strategy-order-button { flex: 0 0 auto; min-width: 48px; padding: 6px 8px; border: 0; border-radius: 6px; color: #fff; background: var(--green); cursor: pointer; font-size: 8px; font-weight: 850; }
 .strategy-order-button[data-side="SELL"] { background: var(--red); }
 .strategy-order-button:disabled { color: var(--subtle); background: var(--border-soft); cursor: not-allowed; }
+.strategy-signal-return { font-size: 8px; font-weight: 850; line-height: 1; }
+.strategy-signal-return[data-result="profit"] { color: var(--green); }
+.strategy-signal-return[data-result="loss"] { color: var(--red); }
 .strategy-signal-state { flex: 0 0 auto; padding: 3px 6px; border-radius: 5px; color: var(--blue); background: var(--blue-soft); font-size: 7px; font-weight: 800; }
 .strategy-signal-state[data-state="target-reached"] { color: var(--green); background: var(--green-soft); }
 .strategy-signal-state[data-state="stopped"] { color: var(--red); background: var(--red-soft); }

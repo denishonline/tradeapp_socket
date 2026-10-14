@@ -1,5 +1,6 @@
 import { depthUpdateFields } from "./market-depth.js"
 import { toStockName } from "./market-data.js"
+import { passesFailedBidQuality } from "./strategy-quality-gates.js"
 
 const MINUTE = 60_000
 const IST_OFFSET = 330 * MINUTE
@@ -249,6 +250,12 @@ export function createFailedBidAbsorptionRadar({
         quote.lastAt < signalMinute || at - quote.lastAt > 5_000) return false
     const id = `${symbol}:${Math.floor(signalMinute / 1000)}:failed-bid-absorption`
     if (signalIds.has(id)) return false
+    const qualityMetrics = {
+      priceDropPct: candidate.priceDropPct,
+      volumeRatio: candidate.volumeRatio,
+      confirmationBidSharePct: candidate.matches.at(-1).bidSharePct,
+    }
+    if (!passesFailedBidQuality(qualityMetrics)) return false
     const signal = {
       id, strategy: "Failed Bid Absorption", symbol, direction: "SELL",
       pattern: candidate.name === "strict_depth_failure"
