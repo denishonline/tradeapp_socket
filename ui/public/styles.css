@@ -137,6 +137,7 @@ main { display: flex; height: 100%; min-height: 0; flex-direction: column; overf
 .strategy-signal-return { font-size: 8px; font-weight: 850; line-height: 1; }
 .strategy-signal-return[data-result="profit"] { color: var(--green); }
 .strategy-signal-return[data-result="loss"] { color: var(--red); }
+.strategy-signal-return[data-result="unavailable"] { color: var(--subtle); }
 .strategy-signal-state { flex: 0 0 auto; padding: 3px 6px; border-radius: 5px; color: var(--blue); background: var(--blue-soft); font-size: 7px; font-weight: 800; }
 .strategy-signal-state[data-state="target-reached"] { color: var(--green); background: var(--green-soft); }
 .strategy-signal-state[data-state="stopped"] { color: var(--red); background: var(--red-soft); }

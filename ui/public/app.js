@@ -40,6 +40,7 @@ const NIFTY50_SYMBOL = "NIFTY50"
 let selectedSymbol = null
 let candles = []
 let liveMinute = null
+let strategySignals = []
 let control = null
 let chartRequest = 0
 let toastTimer
@@ -122,17 +123,21 @@ socket.on("history:status", (history) =>
 socket.on("stocks:snapshot", (snapshot) => {
   stocks.clear()
   for (const stock of snapshot) stocks.set(stock.symbol, stock)
+  updateActiveStrategyReturns()
   if (!selectedSymbol) void selectStock(NIFTY50_SYMBOL)
   else paintSelectedQuote()
 })
 socket.on("stocks:update", (tick) => {
   stocks.set(tick.symbol, { ...(stocks.get(tick.symbol) || {}), ...tick })
+  updateActiveStrategyReturns(tick.symbol)
   if (tick.symbol === selectedSymbol) paintSelectedQuote()
 })
 socket.on("strategy:signals", (signals) => {
   const current = signals || []
+  strategySignals = current
   notifyNewRadarSignals(current)
   renderStrategySignals(current)
+  drawChart()
 })
 socket.on("candle:update", ({ symbol, candle }) => {
   if (symbol !== selectedSymbol) return
@@ -550,7 +555,7 @@ function renderStrategySignals(signals) {
       .map(
         (strategy) => `
       <section class="strategy-signal-group">
-        <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>0</span></div>
+        <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3></div>
         <p class="strategy-empty">-N/A-</p>
       </section>`,
       )
@@ -567,7 +572,7 @@ function renderStrategySignals(signals) {
     .map(
       ([strategy, items]) => `
     <section class="strategy-signal-group">
-      <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3><span>${items.length}</span></div>
+      <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3></div>
       <div class="strategy-signal-list">${
         items.length
           ? items
@@ -585,19 +590,24 @@ function renderStrategySignals(signals) {
                   ? `Place ${direction} cash order`
                   : String(signal.status || "Signal unavailable")
                 const entry = Number(signal.price)
-                const status = String(signal.status || "").toLowerCase()
-                const fallbackExit = status === "target reached"
-                  ? Number(signal.target)
-                  : status === "stopped" ? Number(signal.stop) : NaN
-                const recordedExit = Number(signal.exitPrice)
-                const exit = Number.isFinite(recordedExit) && recordedExit > 0
-                  ? recordedExit : fallbackExit
-                const signalReturn = entry > 0 && exit > 0 && !active
-                  ? (direction === "SELL" ? 1 - exit / entry : exit / entry - 1) * 100
-                  : NaN
-                const returnMarkup = Number.isFinite(signalReturn)
-                  ? `<span class="strategy-signal-return" data-result="${signalReturn >= 0 ? "profit" : "loss"}">${signalReturn >= 0 ? "+" : ""}${signalReturn.toFixed(2)}%</span>`
-                  : ""
+                const exit = strategySignalExitPrice(signal)
+                const livePrice = Number(stocks.get(signal.symbol)?.price)
+                const markPrice = active ? livePrice : exit
+                const signalReturn = calculateStrategyReturn(
+                  direction,
+                  entry,
+                  markPrice,
+                )
+                const result = Number.isFinite(signalReturn)
+                  ? signalReturn >= 0
+                    ? "profit"
+                    : "loss"
+                  : "unavailable"
+                const returnText = formatStrategyReturn(signalReturn)
+                const returnMarkup =
+                  entry > 0
+                    ? `<span class="strategy-signal-return" data-result="${result}" data-live="${active}" data-return-symbol="${escapeHtml(signal.symbol)}" data-entry-price="${entry}" data-direction="${escapeHtml(direction)}">${escapeHtml(returnText)}</span>`
+                    : ""
                 return `<div class="strategy-signal-row">
           <button type="button" class="strategy-signal-copy" data-symbol="${escapeHtml(signal.symbol)}" aria-label="Open ${escapeHtml(signal.symbol)} chart">
             <strong>${escapeHtml(signal.symbol)}</strong><time datetime="${escapeHtml(signal.time)}">${escapeHtml(signalTime)}</time>
@@ -614,6 +624,47 @@ function renderStrategySignals(signals) {
     </section>`,
     )
     .join("")
+}
+
+function calculateStrategyReturn(direction, entry, markPrice) {
+  if (!(entry > 0) || !(markPrice > 0)) return NaN
+  return (
+    (direction === "SELL" ? 1 - markPrice / entry : markPrice / entry - 1) * 100
+  )
+}
+
+function strategySignalExitPrice(signal) {
+  const recordedExit = Number(signal.exitPrice)
+  if (Number.isFinite(recordedExit) && recordedExit > 0) return recordedExit
+  const status = String(signal.status || "").toLowerCase()
+  if (status === "target reached") return Number(signal.target)
+  if (status === "stopped") return Number(signal.stop)
+  return NaN
+}
+
+function formatStrategyReturn(value) {
+  return Number.isFinite(value)
+    ? `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`
+    : "—"
+}
+
+function updateActiveStrategyReturns(symbol = null) {
+  for (const element of document.querySelectorAll(
+    '.strategy-signal-return[data-live="true"]',
+  )) {
+    const signalSymbol = element.dataset.returnSymbol
+    if (symbol && signalSymbol !== symbol) continue
+    const livePrice = Number(stocks.get(signalSymbol)?.price)
+    const entry = Number(element.dataset.entryPrice)
+    const direction = String(element.dataset.direction || "BUY").toUpperCase()
+    const value = calculateStrategyReturn(direction, entry, livePrice)
+    element.textContent = formatStrategyReturn(value)
+    element.dataset.result = Number.isFinite(value)
+      ? value >= 0
+        ? "profit"
+        : "loss"
+      : "unavailable"
+  }
 }
 
 function radarSignalId(signal) {
@@ -813,6 +864,13 @@ function drawChart() {
     context.globalAlpha = 1
   })
 
+  drawTradeArrows(context, data, {
+    margin,
+    candleSlot,
+    priceBottom,
+    y,
+  })
+
   const labelCount = Math.min(6, data.length)
   context.textAlign = "center"
   context.textBaseline = "top"
@@ -828,6 +886,67 @@ function drawChart() {
       bounds.height - margin.bottom + 11,
     )
   }
+}
+
+function drawTradeArrows(context, data, chart) {
+  if (!selectedSymbol || selectedSymbol === NIFTY50_SYMBOL) return
+  const candleIndexByMinute = new Map(
+    data.map((candle, index) => [Math.floor(Number(candle.time) / 60), index]),
+  )
+  const marker = (at, price, direction, color) => {
+    if (!Number.isFinite(at) || !(price > 0)) return
+    const index = candleIndexByMinute.get(Math.floor(at / 60_000))
+    if (!Number.isInteger(index)) return
+    const x = chart.margin.left + chart.candleSlot * index + chart.candleSlot / 2
+    const tipY = Math.max(
+      chart.margin.top + 5,
+      Math.min(chart.priceBottom - 5, chart.y(price)),
+    )
+    drawChartArrow(context, x, tipY, direction, color)
+  }
+
+  for (const signal of strategySignals) {
+    if (signal.symbol !== selectedSymbol) continue
+    const direction = String(signal.direction || "BUY").toUpperCase()
+    marker(
+      Date.parse(signal.time),
+      Number(signal.price),
+      direction === "SELL" ? "down" : "up",
+      "#000000",
+    )
+    const exitAt = Date.parse(signal.resolvedAt)
+    const exitPrice = strategySignalExitPrice(signal)
+    marker(
+      exitAt,
+      exitPrice,
+      direction === "SELL" ? "up" : "down",
+      "#000000",
+    )
+  }
+}
+
+function drawChartArrow(context, x, tipY, direction, color) {
+  const arrowHeight = 13
+  const headWidth = 4
+  const sign = direction === "up" ? 1 : -1
+  const tailY = tipY + sign * arrowHeight
+  const headY = tipY + sign * 5
+  context.save()
+  context.strokeStyle = color
+  context.fillStyle = color
+  context.lineWidth = 2
+  context.lineCap = "round"
+  context.beginPath()
+  context.moveTo(x, tailY)
+  context.lineTo(x, headY)
+  context.stroke()
+  context.beginPath()
+  context.moveTo(x, tipY)
+  context.lineTo(x - headWidth, headY)
+  context.lineTo(x + headWidth, headY)
+  context.closePath()
+  context.fill()
+  context.restore()
 }
 
 function showToast(message, kind) {

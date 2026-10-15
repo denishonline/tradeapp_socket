@@ -22,6 +22,9 @@
     "scan:depth:short-patterns": "node scripts/scan-short-depth-patterns.js",
     "scan:depth:absorption": "node scripts/scan-long-depth-absorption.js",
     "replay:depth:radar": "node scripts/replay-depth-radar-engine.js",
+    "replay:ema-depth-expansion": "node scripts/replay-ema-depth-expansion-strategy.js",
+    "rank:depth-trend": "node scripts/rank-depth-trend-at-cutoff.js",
+    "replay:ema5-10-bearish": "node scripts/replay-ema5-10-bearish-depth.js",
     "login": "node autologin.js",
     "pullLotSize": "node pullFuturesLotSize.js",
     "deploy": "node deploy.js"

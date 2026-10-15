@@ -1,6 +1,5 @@
 import { depthUpdateFields } from "./market-depth.js"
 import { toStockName } from "./market-data.js"
-import { passesMultiFrameBuyQuality } from "./strategy-quality-gates.js"
 
 const MINUTE = 60_000
 const IST_OFFSET = 330 * MINUTE
@@ -298,7 +297,7 @@ export function createMultiFrameDepthBuyRadar({
       depthChange15: depth.at(-1).full / depth.at(-1).count - depth[0].full / depth[0].count,
       top2Imbalance3: mean(lastDepth3.map((bucket) => bucket.top2 / bucket.count)) }
     const branch = branchFor(metrics)
-    if (!branch || !passesMultiFrameBuyQuality(branch, metrics)) return
+    if (!branch) return
     const quote = booksByStock.get(symbol)
     const entry = quote?.book?.ask
     if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(quote.lastAt) ||

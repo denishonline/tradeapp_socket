@@ -1,6 +1,5 @@
 import { depthUpdateFields } from "./market-depth.js"
 import { toStockName } from "./market-data.js"
-import { passesRevisedAbsorptionQuality } from "./strategy-quality-gates.js"
 
 const MINUTE = 60_000
 const IST_OFFSET = 330 * MINUTE
@@ -316,7 +315,6 @@ export function createRevisedAbsorptionBreakoutRadar({
       breadthReturn3PositivePct: breadth.return3PositivePct,
       ...extra,
     }
-    if (!passesRevisedAbsorptionQuality(pattern, metrics)) return false
     const signal = {
       id, strategy: "Revised Absorption Breakout", symbol, direction: "BUY", pattern,
       time: new Date(currentAt).toISOString(), price: entry,

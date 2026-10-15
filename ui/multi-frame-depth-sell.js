@@ -1,6 +1,5 @@
 import { depthUpdateFields } from "./market-depth.js"
 import { toStockName } from "./market-data.js"
-import { passesMultiFrameSellQuality } from "./strategy-quality-gates.js"
 
 const MINUTE = 60_000
 const IST_OFFSET = 330 * MINUTE
@@ -319,7 +318,7 @@ export function createMultiFrameDepthSellRadar({
         ? mean(rows.slice(-3).map((row) => row.volume)) / previous3Volume : NaN,
     }
     const branch = branchFor(metrics)
-    if (!branch || !passesMultiFrameSellQuality(branch, metrics)) return
+    if (!branch) return
     const ist = new Date(at + IST_OFFSET)
     if (ist.getUTCHours() * 60 + ist.getUTCMinutes() > 14 * 60 + 30) return
 
