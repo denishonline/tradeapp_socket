@@ -26,6 +26,8 @@ import { createMultiFrameDepthSellRadar } from "./multi-frame-depth-sell.js"
 import { createMultiFrameDepthBuyRadar } from "./multi-frame-depth-buy.js"
 import { createFailedBidAbsorptionRadar } from "./failed-bid-absorption.js"
 import { createRevisedAbsorptionBreakoutRadar } from "./revised-absorption-breakout.js"
+import { createCandleDepthTargetRadar } from "./candle-depth-target-radar.js"
+import { createChronologicalPositiveRadar } from "./chronological-positive-radar.js"
 import { createStrategySignalStore } from "./strategy-signal-store.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -83,6 +85,8 @@ const multiFrameSellSignalStore = createStrategySignalStore(path.join(databaseDi
 const multiFrameBuySignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "multi-frame-depth-buy"))
 const failedBidAbsorptionSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "failed-bid-absorption"))
 const revisedAbsorptionSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "revised-absorption-breakout"))
+const candleDepthTargetSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "candle-depth-target"))
+const chronologicalPositiveSignalStore = createStrategySignalStore(path.join(databaseDirectory, "strategy-signals", "chronological-positive"))
 let earlyRadar
 let bidSupportRadar
 let bidRecoveryRadar
@@ -91,11 +95,15 @@ let multiFrameSellRadar
 let multiFrameBuyRadar
 let failedBidAbsorptionRadar
 let revisedAbsorptionRadar
+let candleDepthTargetRadar
+let chronologicalPositiveRadar
 function radarSnapshot() {
   return [...strategyRadar.snapshot(), ...earlyRadar.snapshot(), ...bidSupportRadar.snapshot(),
     ...bidRecoveryRadar.snapshot(), ...openingBidRecoveryRadar.snapshot(),
     ...multiFrameSellRadar.snapshot(), ...multiFrameBuyRadar.snapshot(),
-    ...failedBidAbsorptionRadar.snapshot(), ...revisedAbsorptionRadar.snapshot()]
+    ...failedBidAbsorptionRadar.snapshot(), ...revisedAbsorptionRadar.snapshot(),
+    ...(candleDepthTargetRadar?.snapshot() || []),
+    ...(chronologicalPositiveRadar?.snapshot() || [])]
     .sort((left, right) => Date.parse(right.time) - Date.parse(left.time))
 }
 function emitRadarSignals() {
@@ -173,6 +181,22 @@ revisedAbsorptionRadar = createRevisedAbsorptionBreakoutRadar({
     emitRadarSignals()
   },
 })
+candleDepthTargetRadar = createCandleDepthTargetRadar({
+  initialSignals: candleDepthTargetSignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { candleDepthTargetSignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save candle-depth target signals:", error.message) }
+    emitRadarSignals()
+  },
+})
+chronologicalPositiveRadar = createChronologicalPositiveRadar({
+  initialSignals: chronologicalPositiveSignalStore.read(marketDepthSession().date),
+  onUpdate: (signals, date) => {
+    try { chronologicalPositiveSignalStore.save(date, signals) }
+    catch (error) { console.error("Cannot save chronological positive signals:", error.message) }
+    emitRadarSignals()
+  },
+})
 const candleBuilder = createLiveCandleBuilder({
   store: candles,
   io,
@@ -186,6 +210,8 @@ const candleBuilder = createLiveCandleBuilder({
     multiFrameBuyRadar.observeCandle(symbol, candle)
     failedBidAbsorptionRadar.observeCandle(symbol, candle)
     revisedAbsorptionRadar.observeCandle(symbol, candle)
+    candleDepthTargetRadar.observeCandle(symbol, candle)
+    chronologicalPositiveRadar.observeCandle(symbol, candle)
   },
   onError: (symbol, error) => {
     candleCapture.error = `Candle storage error for ${symbol}: ${error.message}`
@@ -417,6 +443,8 @@ async function stopMarketEngine(message = "Market stream stopped") {
   multiFrameBuyRadar.resetLiveState()
   failedBidAbsorptionRadar.resetLiveState()
   revisedAbsorptionRadar.resetLiveState()
+  candleDepthTargetRadar.resetLiveState()
+  chronologicalPositiveRadar.resetLiveState()
   const currentFeed = feed
   const currentTrading = trading
   feed = null
@@ -527,6 +555,8 @@ app.post("/api/control/start", async (_request, response) => {
     await multiFrameBuyRadar.seed(stocks, candles)
     await failedBidAbsorptionRadar.seed(stocks, candles)
     await revisedAbsorptionRadar.seed(stocks, candles)
+    await candleDepthTargetRadar.seed(stocks, candles)
+    await chronologicalPositiveRadar.seed(stocks, candles)
     const nextTrading = await createTradingRuntime({ rootDirectory, constants: CONSTANT, config: DEPTH_TREND, history })
     const nextFeed = createMarketFeed({
       io,
@@ -547,6 +577,8 @@ app.post("/api/control/start", async (_request, response) => {
           multiFrameBuyRadar.observeDepth(data, at)
           failedBidAbsorptionRadar.observeDepth(data, at, marketContext)
           revisedAbsorptionRadar.observeDepth(data, at, marketContext)
+          candleDepthTargetRadar.observeDepth(data, at, marketContext)
+          chronologicalPositiveRadar.observeDepth(data, at, marketContext)
         }
         if (kind === "price") {
           candleCapture.priceTicks++
@@ -558,6 +590,8 @@ app.post("/api/control/start", async (_request, response) => {
           multiFrameBuyRadar.observePrice(data, at)
           failedBidAbsorptionRadar.observePrice(data, at)
           revisedAbsorptionRadar.observePrice(data, at)
+          candleDepthTargetRadar.observePrice(data, at)
+          chronologicalPositiveRadar.observePrice(data, at)
           candleCapture.lastPriceAt = at instanceof Date ? at.toISOString() : new Date(at).toISOString()
           if (candleBuilder.observe(data, at)) candleCapture.candleUpdates++
         }
@@ -573,6 +607,8 @@ app.post("/api/control/start", async (_request, response) => {
         multiFrameBuyRadar.resetLiveState()
         failedBidAbsorptionRadar.resetLiveState()
         revisedAbsorptionRadar.resetLiveState()
+        candleDepthTargetRadar.resetLiveState()
+        chronologicalPositiveRadar.resetLiveState()
         candleBuilder.reset()
       },
       onReady: nextTrading.ready,
@@ -763,6 +799,8 @@ const earlyRadarTimer = setInterval(() => {
     multiFrameBuyRadar.flushCompleted(Date.now())
     failedBidAbsorptionRadar.flushCompleted(Date.now())
     revisedAbsorptionRadar.flushCompleted(Date.now())
+    candleDepthTargetRadar.flushCompleted(Date.now())
+    chronologicalPositiveRadar.flushCompleted(Date.now())
   }
 }, 1000)
 

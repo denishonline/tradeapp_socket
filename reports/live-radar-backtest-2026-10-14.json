@@ -1,0 +1,116 @@
+{
+  "date": "2026-10-14",
+  "replayUntil": "15:31",
+  "mode": "chronological replay through the same live Strategy Radar engines",
+  "assumptions": {
+    "timerFlush": "one-second chronological flush",
+    "candleAvailability": "one-minute candle delivered only after its minute completes",
+    "priceEvents": "deduplicated archived marketContext price updates",
+    "activeAtEnd": "marked to the final archived price",
+    "costsAndSlippage": "excluded"
+  },
+  "coverage": {
+    "stocks": 205,
+    "strategies": 11,
+    "depthEvents": 2155102,
+    "priceEvents": 1118186
+  },
+  "summary": {
+    "signals": 160,
+    "winners": 41,
+    "losers": 95,
+    "flat": 24,
+    "winnersAbove1Pct": 10,
+    "totalReturnPct": -10.66
+  },
+  "byStrategy": {
+    "Persistent Bid Absorption Breakout": {
+      "signals": 0,
+      "winners": 0,
+      "losers": 0,
+      "flat": 0,
+      "winnersAbove1Pct": 0,
+      "totalReturnPct": 0
+    },
+    "Early Depth-Control Breakout": {
+      "signals": 0,
+      "winners": 0,
+      "losers": 0,
+      "flat": 0,
+      "winnersAbove1Pct": 0,
+      "totalReturnPct": 0
+    },
+    "Bid Support Breakout": {
+      "signals": 0,
+      "winners": 0,
+      "losers": 0,
+      "flat": 0,
+      "winnersAbove1Pct": 0,
+      "totalReturnPct": 0
+    },
+    "Bid-Dominant Recovery": {
+      "signals": 2,
+      "winners": 0,
+      "losers": 2,
+      "flat": 0,
+      "winnersAbove1Pct": 0,
+      "totalReturnPct": -0.8
+    },
+    "Bid Supported Dip Recovery": {
+      "signals": 0,
+      "winners": 0,
+      "losers": 0,
+      "flat": 0,
+      "winnersAbove1Pct": 0,
+      "totalReturnPct": 0
+    },
+    "Multi-Frame Depth Continuation": {
+      "signals": 1,
+      "winners": 1,
+      "losers": 0,
+      "flat": 0,
+      "winnersAbove1Pct": 1,
+      "totalReturnPct": 1.54
+    },
+    "Multi-Frame Depth Recovery": {
+      "signals": 1,
+      "winners": 1,
+      "losers": 0,
+      "flat": 0,
+      "winnersAbove1Pct": 1,
+      "totalReturnPct": 1.92
+    },
+    "Failed Bid Absorption": {
+      "signals": 2,
+      "winners": 1,
+      "losers": 1,
+      "flat": 0,
+      "winnersAbove1Pct": 1,
+      "totalReturnPct": 0.61
+    },
+    "Revised Absorption Breakout": {
+      "signals": 11,
+      "winners": 0,
+      "losers": 11,
+      "flat": 0,
+      "winnersAbove1Pct": 0,
+      "totalReturnPct": -4.57
+    },
+    "Five-Candle Depth Target": {
+      "signals": 137,
+      "winners": 37,
+      "losers": 77,
+      "flat": 23,
+      "winnersAbove1Pct": 6,
+      "totalReturnPct": -8.52
+    },
+    "Chronological Positive Filter": {
+      "signals": 6,
+      "winners": 1,
+      "losers": 4,
+      "flat": 1,
+      "winnersAbove1Pct": 1,
+      "totalReturnPct": -0.84
+    }
+  }
+}

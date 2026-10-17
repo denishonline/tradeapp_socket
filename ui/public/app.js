@@ -92,6 +92,7 @@ const radarStrategies = [
   "Multi-Frame Depth Recovery",
   "Failed Bid Absorption",
   "Revised Absorption Breakout",
+  "Chronological Positive Filter",
 ]
 
 const socket = io({ transports: ["websocket", "polling"] })
