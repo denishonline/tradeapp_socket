@@ -3,7 +3,9 @@ import { describe, it } from "node:test"
 import {
   loadStocks,
   normalizeTick,
+  toFyersIndexSymbol,
   toFyersSymbol,
+  toMarketName,
   toStockName,
 } from "../ui/market-data.js"
 
@@ -11,14 +13,16 @@ describe("market data helpers", () => {
   it("loads and de-duplicates the stock database", async () => {
     const stocks = await loadStocks(new URL("../db/stocks", import.meta.url))
 
-    assert.equal(stocks.length, 205)
+    assert.equal(stocks.length, 215)
     assert.equal(stocks.filter((stock) => stock === "NYKAA").length, 1)
   })
 
   it("converts stock names to and from Fyers symbols", () => {
     assert.equal(toFyersSymbol("M&M"), "NSE:M&M-EQ")
+    assert.equal(toFyersIndexSymbol("NIFTYAUTO"), "NSE:NIFTYAUTO-INDEX")
     assert.equal(toStockName("NSE:M&M-EQ"), "M&M")
     assert.equal(toStockName("NSE:NIFTY50-INDEX"), null)
+    assert.equal(toMarketName("NSE:NIFTY50-INDEX"), "NIFTY50")
   })
 
   it("normalizes a Fyers lite tick", () => {
@@ -38,6 +42,7 @@ describe("market data helpers", () => {
         updatedAt: "2023-11-14T22:13:20.000Z",
       },
     )
+    assert.equal(normalizeTick({ symbol: "NSE:NIFTYAUTO-INDEX", ltp: 12345 }).symbol, "NIFTYAUTO")
   })
 
   it("ignores socket messages that are not price ticks", () => {

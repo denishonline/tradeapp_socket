@@ -1,16 +1,18 @@
 import apiV3 from "fyers-api-v3"
-import { normalizeTick, toFyersSymbol, toStockName } from "./market-data.js"
+import { normalizeTick, toFyersIndexSymbol, toFyersSymbol, toStockName } from "./market-data.js"
 import { depthUpdateFields, marketDepthSession } from "./market-depth.js"
 
 const { fyersDataSocket: FyersDataSocket } = apiV3
 
 export function createMarketFeed({
-  io, stocks, clientId, accessToken, history, socketFactory = FyersDataSocket,
-  depthHistory,
+  io, stocks, indexSymbols = [], clientId, accessToken, history, socketFactory = FyersDataSocket,
+  depthHistory, capturePrices = true,
   onMarket = () => {}, onGap = () => {}, onReady = () => {}, clock = () => new Date(),
 }) {
   const allowedStocks = new Set(stocks)
+  const allowedPrices = new Set(capturePrices ? [...stocks, ...indexSymbols] : [])
   const stockSymbols = stocks.map(toFyersSymbol)
+  const priceSymbols = capturePrices ? [...stockSymbols, ...indexSymbols.map(toFyersIndexSymbol)] : []
   const stockDepthFiles = new Map(stocks.map((stock) => {
     const symbol = toFyersSymbol(stock)
     return [symbol, { symbol }]
@@ -154,6 +156,7 @@ export function createMarketFeed({
         )
         onMarket("depth", item, receivedAt, latestMarketContext.get(stock) || null)
         received.depth++
+        globalThis.__tradeappErrorLog?.markFeedData("market-depth")
         lastDepthAt = receivedAt.toISOString()
         lastReceived.set(stock, { ...lastReceived.get(stock), depth: receivedAt.toISOString() })
         markMarketDataLive()
@@ -163,11 +166,12 @@ export function createMarketFeed({
       const isPrice = item.type === "sf" ||
         (item.ltp != null && item.ltp !== "" && Number.isFinite(Number(item.ltp)))
       const tick = normalizeTick(item)
-      if (!isPrice || !tick || !allowedStocks.has(tick.symbol)) continue
+      if (!isPrice || !tick || !allowedPrices.has(tick.symbol)) continue
 
       history?.record("price", item, receivedAt)
       onMarket("price", item, receivedAt)
       received.price++
+      globalThis.__tradeappErrorLog?.markFeedData("price-history")
       lastReceived.set(tick.symbol, { ...lastReceived.get(tick.symbol), price: receivedAt.toISOString() })
       markMarketDataLive()
       const cumulativeVolume = Number(item.vol_traded_today)
@@ -200,8 +204,9 @@ export function createMarketFeed({
     stopping = false
     publishStatus("connecting", "Connecting to FYERS market data...")
     history?.record("session_start", {
-      symbols: stockSymbols,
-      priceMode: "full",
+      symbols: priceSymbols,
+      indexSymbols,
+      priceMode: capturePrices ? "full" : "disabled",
       priceChannel: 1,
       depthChannel: 1,
       depthScope: "NSE cash equities only",
@@ -225,9 +230,13 @@ export function createMarketFeed({
         connected = false
         depthSubscribedSymbols.clear()
         try {
-          publishStatus("connecting", "Requesting full price and market-depth subscriptions...")
-          await dataSocket.subscribe(stockSymbols, false, 1)
-          if (stopping || epoch !== connectionEpoch) return
+          publishStatus("connecting", capturePrices
+            ? "Requesting full price and market-depth subscriptions..."
+            : "Requesting market-depth subscription...")
+          if (priceSymbols.length) {
+            await dataSocket.subscribe(priceSymbols, false, 1)
+            if (stopping || epoch !== connectionEpoch) return
+          }
           await dataSocket.mode(dataSocket.FullMode, 1)
           if (stopping || epoch !== connectionEpoch) return
           // Keep quote and depth subscriptions on channel 1 for this SDK version.
@@ -299,7 +308,16 @@ export function createMarketFeed({
     }
   }
 
-  return { sendSnapshot, snapshot, start, stop, getStatus }
+  function getBook(symbol) {
+    const fields = depthFieldState.get(symbol)
+    if (!fields) return null
+    const bids = depthLevels(fields, "bid").map(({ price, size }) => ({ price: Number(price), qty: Number(size) }))
+    const asks = depthLevels(fields, "ask").map(({ price, size }) => ({ price: Number(price), qty: Number(size) }))
+    if (!bids.length || !asks.length || [...bids, ...asks].some((x) => !(x.price > 0) || !(x.qty >= 0)) || bids[0].price >= asks[0].price) return null
+    return { bids, asks, at: Date.now() }
+  }
+
+  return { sendSnapshot, snapshot, start, stop, getStatus, getBook }
 }
 
 function createStatus(state, message) {

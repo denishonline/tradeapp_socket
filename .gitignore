@@ -12,7 +12,10 @@ db/option-depth/
 db/cash-depth/
 db/strategy-signals/
 db/logs/
+db/live-strategy-signals/
 csv/
-
+reports/
+csv/
+package-lock.json
 *.log
 .DS_Store

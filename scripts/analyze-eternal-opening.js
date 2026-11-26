@@ -1,0 +1,5 @@
+import fs from 'node:fs'; import path from 'node:path'
+const IST=330*60000, rows=fs.readFileSync(path.join(process.cwd(),'db/candles/ETERNAL.jsonl'),'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse).sort((a,b)=>a.time-b.time),local=t=>{const s=new Date(t*1000+IST).toISOString();return{d:s.slice(0,10),hm:s.slice(11,16)}}
+let p=1000,n=1000,ep=1000,en=1000,pv=null,pc=null,pe=null,pp=null,ne=null, out=[]
+for(const x of rows){const z=local(x.time);if(pv!==null){const ch=x.close/pc;if(x.volume>pv)p*=ch;if(x.volume<pv)n*=ch}ep=2/226*p+224/226*ep;en=2/226*n+224/226*en;if(z.d==='2026-11-05'&&z.hm>='09:15'&&z.hm<='09:30'){out.push({time:z.hm,close:x.close,volume:x.volume,pviEma225:+ep.toFixed(3),nviEma225:+en.toFixed(3),pviDir:pe==null?'—':ep>pe?'UP':'DOWN',nviDir:ne==null?'—':en>ne?'UP':'DOWN'});if(ep!==pe){} }pv=x.volume;pc=x.close;pe=ep;ne=en}
+console.table(out);console.log({open:out[0]?.close,close:out.at(-1)?.close,returnPct:100*(out.at(-1)?.close/out[0]?.close-1),pviDown:out.filter(x=>x.pviDir==='DOWN').length,pviUp:out.filter(x=>x.pviDir==='UP').length,nviDown:out.filter(x=>x.nviDir==='DOWN').length,nviUp:out.filter(x=>x.nviDir==='UP').length})

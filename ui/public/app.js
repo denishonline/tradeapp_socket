@@ -2,8 +2,6 @@ const elements = Object.fromEntries(
   [
     "connectionChip",
     "connectionText",
-    "niftyChartButton",
-    "radarAlertButton",
     "autoLoginButton",
     "preCandlesButton",
     "startServerButton",
@@ -12,7 +10,9 @@ const elements = Object.fromEntries(
     "serverLabel",
     "serverActionLabel",
     "orderMode",
-    "strategySignalGroups",
+    "cutoffTimeInput",
+    "cutoffLiveButton",
+    "cutoffMode",
     "captureServerStatus",
     "captureServerMessage",
     "captureDepthStatus",
@@ -22,11 +22,17 @@ const elements = Object.fromEntries(
     "positionsTotal",
     "positionsSummary",
     "positionsList",
+    "askAbsorptionSignals",
+    "manualCandleDepthSignals",
+    "manualCandleDepthCutoff",
+    "manualCandleDepthCurrent",
+    "manualCandleDepthCutoffMode",
     "chartSymbol",
     "chartPrice",
     "chartChange",
     "chartSubtitle",
     "chartWrap",
+    "directionalShares",
     "candleChart",
     "chartEmpty",
     "databaseSize",
@@ -37,19 +43,19 @@ const elements = Object.fromEntries(
 
 const stocks = new Map()
 const NIFTY50_SYMBOL = "NIFTY50"
+const CHART_SESSION_LIMIT = 10
+const CHART_CANDLE_FETCH_LIMIT = 5000
+const CHART_VISIBLE_CANDLE_LIMIT = 360
 let selectedSymbol = null
 let candles = []
 let liveMinute = null
-let strategySignals = []
 let control = null
 let chartRequest = 0
 let toastTimer
 let startRequestPending = false
 let startTimeout = null
-let niftyRequestPending = false
 let positionsRequestPending = false
-let radarSignalsInitialized = false
-const knownRadarSignalIds = new Set()
+let cutoffRequestPending = false
 
 const money = new Intl.NumberFormat("en-IN", {
   style: "currency",
@@ -70,30 +76,22 @@ const time = new Intl.DateTimeFormat("en-IN", {
 })
 const axisTime = new Intl.DateTimeFormat("en-IN", {
   timeZone: "Asia/Kolkata",
-  hour: "2-digit",
-  minute: "2-digit",
-})
-const radarDateTime = new Intl.DateTimeFormat("en-IN", {
-  timeZone: "Asia/Kolkata",
   day: "2-digit",
   month: "short",
-  year: "numeric",
   hour: "2-digit",
   minute: "2-digit",
-  second: "2-digit",
 })
-const radarStrategies = [
-  "Persistent Bid Absorption Breakout",
-  "Early Depth-Control Breakout",
-  "Bid Support Breakout",
-  "Bid-Dominant Recovery",
-  "Bid Supported Dip Recovery",
-  "Multi-Frame Depth Continuation",
-  "Multi-Frame Depth Recovery",
-  "Failed Bid Absorption",
-  "Revised Absorption Breakout",
-  "Chronological Positive Filter",
-]
+
+function candleSessionDate(candle) {
+  return new Date(Number(candle.time) * 1000 + 330 * 60_000).toISOString().slice(0, 10)
+}
+
+function recentChartSessions(rows) {
+  const ordered = [...rows].sort((left, right) => Number(left.time) - Number(right.time))
+  const dates = [...new Set(ordered.map(candleSessionDate))].slice(-CHART_SESSION_LIMIT)
+  const included = new Set(dates)
+  return ordered.filter((candle) => included.has(candleSessionDate(candle)))
+}
 
 const socket = io({ transports: ["websocket", "polling"] })
 
@@ -121,24 +119,220 @@ socket.on("control:status", applyControlStatus)
 socket.on("history:status", (history) =>
   applyControlStatus({ ...(control || {}), history }),
 )
+socket.on("opening:directional-shares", applyDirectionalSharesTable)
+socket.on("signals:live-scanners", applyLiveSignalScanners)
+
+function syncCutoffControl(payload) {
+  if (!elements.cutoffTimeInput || !elements.cutoffMode || !elements.cutoffLiveButton) return
+  if (cutoffRequestPending) return
+  const fixed = payload?.cutoffMode === "fixed"
+  if (document.activeElement !== elements.cutoffTimeInput)
+    elements.cutoffTimeInput.value = fixed ? payload.selectedCutoffTime || "" : ""
+  elements.cutoffMode.textContent = fixed
+    ? `Fixed at ${payload.selectedCutoffTime} IST`
+    : "Using current IST time"
+  elements.cutoffLiveButton.dataset.active = fixed ? "" : "true"
+}
+
+async function setAnalysisCutoff(cutoffTime) {
+  cutoffRequestPending = true
+  elements.cutoffMode.textContent = cutoffTime ? `Switching to ${cutoffTime} IST...` : "Switching to current IST time..."
+  elements.cutoffLiveButton.dataset.active = cutoffTime ? "" : "true"
+  elements.cutoffTimeInput.disabled = true
+  elements.cutoffLiveButton.disabled = true
+  try {
+    const response = await fetch("/api/control/opening-cutoff", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ cutoffTime: cutoffTime || null }),
+    })
+    const result = await response.json().catch(() => ({}))
+    if (!response.ok || !result.ok) throw new Error(result.message || "Unable to change cutoff time")
+    if (result.status) applyDirectionalSharesTable(result.status)
+    showToast(result.message, "success")
+  } catch (error) {
+    showToast(error.message, "error")
+    await refreshDirectionalShares().catch(() => {})
+  } finally {
+    cutoffRequestPending = false
+    elements.cutoffTimeInput.disabled = false
+    elements.cutoffLiveButton.disabled = false
+  }
+}
+
+function applyDirectionalSharesTable(payload) {
+  const opening = elements.directionalShares?.querySelector('[data-window="opening"]')
+  const lastFive = elements.directionalShares?.querySelector('[data-window="last-five"]')
+  const lastFifteen = elements.directionalShares?.querySelector('[data-window="last-fifteen"]')
+  if (!opening || !lastFive || !lastFifteen) return
+  const progress = elements.directionalShares?.querySelector(".directional-progress")
+  if (progress) progress.textContent = payload?.message || "Waiting for scan..."
+  syncCutoffControl(payload)
+  elements.directionalShares.dataset.state = payload?.state || "waiting"
+  const paint = (row, values, direction) => {
+    row.querySelectorAll("td").forEach((cell, index) => { cell.textContent = values[index] })
+    row.dataset.direction = direction
+  }
+  const data = payload?.data
+  if (!data) {
+    paint(opening, ["-", "-", "-"], "")
+    paint(lastFive, ["-", "-", "-"], "")
+    paint(lastFifteen, ["-", "-", "-"], "")
+    return
+  }
+  const direction = value => value > 0 ? "bullish" : value < 0 ? "bearish" : "neutral"
+  const openingDifference = Number.parseFloat(data.difference)
+  const lastFiveDifference = Number.parseFloat(data.lastFiveDifference)
+  const lastFifteenDifference = Number.parseFloat(data.lastFifteenDifference)
+  const openingWindow = opening.querySelector("[data-opening-window]")
+  if (openingWindow) openingWindow.textContent = `09:15–${data.cutoffTime || "now"}`
+  paint(opening, [data.bullish, data.bearish, data.difference], direction(openingDifference))
+  paint(lastFive, [data.lastFiveBullish, data.lastFiveBearish, data.lastFiveDifference], direction(lastFiveDifference))
+  paint(lastFifteen, [data.lastFifteenBullish, data.lastFifteenBearish, data.lastFifteenDifference], direction(lastFifteenDifference))
+  elements.directionalShares.title = `${payload.message || "Opening direction"} · ${data.analyzed || 0} high-volume stocks`
+}
+
+function applyDirectionalShares(payload) {
+  const lines = elements.directionalShares?.querySelectorAll("strong")
+  if (!lines?.length) return
+  const progress = elements.directionalShares?.querySelector(".directional-progress")
+  const lastFive = elements.directionalShares?.querySelector(".directional-last-five")
+  if (progress) progress.textContent = payload?.message || "Waiting for scan..."
+  elements.directionalShares.dataset.state = payload?.state || "waiting"
+  const data = payload?.data
+  if (!data) {
+    if (lastFive) lastFive.textContent = "Last 5m: Bullish: — · Bearish: — · Difference: —"
+    lines[0].textContent = "Bullish: —"
+    lines[1].textContent = "Bearish: —"
+    lines[2].textContent = "Difference: —"
+    elements.directionalShares.dataset.direction = ""
+    elements.directionalShares.title = payload?.message || "Waiting for opening-direction data."
+    return
+  }
+  if (lastFive) lastFive.textContent = `Last 5m: Bullish: ${data.lastFiveBullish} · Bearish: ${data.lastFiveBearish} · Difference: ${data.lastFiveDifference}`
+  lines[0].textContent = `Bullish: ${data.bullish}`
+  lines[1].textContent = `Bearish: ${data.bearish}`
+  lines[2].textContent = `Difference: ${data.difference}`
+  const difference = Number.parseFloat(data.difference)
+  elements.directionalShares.dataset.direction = difference > 0 ? "bullish" : difference < 0 ? "bearish" : "neutral"
+  elements.directionalShares.title = `${payload.message || "Opening direction"} · ${data.analyzed || 0} high-volume stocks`
+}
+
+function applyLiveSignalScanners(payload) {
+  const panel = elements.askAbsorptionSignals
+  if (panel) renderSignalScanner(panel, payload?.askAbsorption || {})
+}
+
+function renderSignalScanner(panel, scanner) {
+  panel.dataset.state = scanner.state || "waiting"
+  const status = panel.querySelector(".signal-scanner-status")
+  if (status) status.textContent = scanner.message || "Waiting for scan…"
+  for (const side of ["buy", "sell"]) {
+    const signals = Array.isArray(scanner[side]) ? scanner[side] : []
+    const count = panel.querySelector(`[data-count="${side}"]`)
+    const list = panel.querySelector(`[data-side="${side}"]`)
+    if (count) count.textContent = signals.length
+    if (!list) continue
+    list.innerHTML = signals.length
+      ? signals.map((signal) => {
+        const detail = signal.entryTime ? `entry ${signal.entryTime}` : signal.setup
+        return `<button class="signal-row" data-position-symbol="${escapeHtml(signal.stock)}" type="button"><strong>${escapeHtml(signal.stock)}</strong><small>${escapeHtml(signal.signalTime)}${detail ? ` · ${escapeHtml(detail)}` : ""}</small></button>`
+      }).join("")
+      : '<p class="signal-empty">No signals</p>'
+  }
+}
+
+function updateManualCandleDepthCutoff() {
+  const time = elements.manualCandleDepthCutoff.value
+  elements.manualCandleDepthCurrent.dataset.active = time ? "" : "true"
+  elements.manualCandleDepthCutoffMode.textContent = time ? `Scan through ${time} IST` : "Blank uses the latest completed candle"
+}
+
+elements.manualCandleDepthCutoff?.addEventListener("input", updateManualCandleDepthCutoff)
+elements.manualCandleDepthCutoff?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return
+  event.preventDefault()
+  void runManualCandleDepthScan()
+})
+elements.manualCandleDepthCurrent?.addEventListener("click", runManualCandleDepthScan)
+
+async function runManualCandleDepthScan() {
+  const panel = elements.manualCandleDepthSignals
+  const input = elements.manualCandleDepthCutoff
+  const current = elements.manualCandleDepthCurrent
+  if (current.disabled || !input.reportValidity()) return
+  const cutoffTime = input.value || null
+  input.disabled = true
+  current.disabled = true
+  current.textContent = "Scanning…"
+  renderSignalScanner(panel, { state: "scanning", message: cutoffTime
+    ? `Scanning through ${cutoffTime} IST…` : "Scanning through the latest completed candle…" })
+  try {
+    const response = await fetch("/api/control/candle-depth-scan", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ cutoffTime }),
+    })
+    const result = await response.json()
+    if (!response.ok) throw new Error(result.message || "Scan failed.")
+    renderSignalScanner(panel, { ...result, state: "ready" })
+  } catch (error) {
+    renderSignalScanner(panel, { state: "error", message: error.message })
+  } finally {
+    input.disabled = false
+    current.disabled = false
+    current.textContent = "Current"
+  }
+}
+
+function formatNseEquitySymbol(symbol) {
+  const stock = String(symbol || "").trim().replace(/^NSE:/i, "").replace(/-EQ$/i, "")
+  return stock ? `NSE:${stock}-EQ` : ""
+}
+
+async function copySignalStocks(panel, side) {
+  const symbols = [...panel.querySelectorAll(`[data-side="${side}"] [data-position-symbol]`)]
+    .map((row) => formatNseEquitySymbol(row.dataset.positionSymbol))
+    .filter(Boolean)
+  if (!symbols.length) {
+    showToast(`No ${side.toUpperCase()} stocks to copy.`, "error")
+    return
+  }
+  const text = symbols.join(", ")
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text)
+    else {
+      const textarea = document.createElement("textarea")
+      textarea.value = text
+      textarea.setAttribute("readonly", "")
+      textarea.style.position = "fixed"
+      textarea.style.opacity = "0"
+      document.body.append(textarea)
+      textarea.select()
+      const copied = document.execCommand("copy")
+      textarea.remove()
+      if (!copied) throw new Error("Copy command failed")
+    }
+    showToast(`${symbols.length} ${side.toUpperCase()} stock${symbols.length === 1 ? "" : "s"} copied.`, "success")
+  } catch {
+    showToast("Could not copy stocks to the clipboard.", "error")
+  }
+}
+
+async function refreshDirectionalShares() {
+  const response = await fetch("/api/opening-directional-shares", { cache: "no-store", headers: { Accept: "application/json" } })
+  if (response.ok) applyDirectionalSharesTable(await response.json())
+}
+
 socket.on("stocks:snapshot", (snapshot) => {
   stocks.clear()
   for (const stock of snapshot) stocks.set(stock.symbol, stock)
-  updateActiveStrategyReturns()
   if (!selectedSymbol) void selectStock(NIFTY50_SYMBOL)
   else paintSelectedQuote()
 })
 socket.on("stocks:update", (tick) => {
   stocks.set(tick.symbol, { ...(stocks.get(tick.symbol) || {}), ...tick })
-  updateActiveStrategyReturns(tick.symbol)
   if (tick.symbol === selectedSymbol) paintSelectedQuote()
-})
-socket.on("strategy:signals", (signals) => {
-  const current = signals || []
-  strategySignals = current
-  notifyNewRadarSignals(current)
-  renderStrategySignals(current)
-  drawChart()
 })
 socket.on("candle:update", ({ symbol, candle }) => {
   if (symbol !== selectedSymbol) return
@@ -150,28 +344,41 @@ socket.on("candle:complete", ({ symbol, candle }) => {
   liveMinute = null
   upsertCandle(candle)
 })
-
-elements.niftyChartButton.addEventListener(
-  "click",
-  () => void selectStock(NIFTY50_SYMBOL),
-)
-elements.radarAlertButton.addEventListener(
-  "click",
-  () => void enableRadarNotifications(),
-)
-elements.strategySignalGroups.addEventListener("click", (event) => {
-  const orderButton = event.target.closest("[data-radar-order]")
-  if (orderButton) {
-    void placeRadarCashOrder(orderButton)
-    return
-  }
-  const button = event.target.closest("[data-symbol]")
-  if (button) selectStock(button.dataset.symbol)
-})
 elements.positionsList.addEventListener("click", (event) => {
   const row = event.target.closest("[data-position-symbol]")
   if (row && stocks.has(row.dataset.positionSymbol))
     void selectStock(row.dataset.positionSymbol)
+})
+for (const scannerPanel of [elements.askAbsorptionSignals, elements.manualCandleDepthSignals]) {
+  scannerPanel?.addEventListener("click", (event) => {
+    const copyButton = event.target.closest("[data-copy-side]")
+    if (copyButton) {
+      void copySignalStocks(scannerPanel, copyButton.dataset.copySide)
+      return
+    }
+    const row = event.target.closest("[data-position-symbol]")
+    if (row && stocks.has(row.dataset.positionSymbol)) void selectStock(row.dataset.positionSymbol)
+  })
+}
+elements.cutoffTimeInput?.addEventListener("input", () => {
+  if (!cutoffRequestPending)
+    elements.cutoffMode.textContent = elements.cutoffTimeInput.value
+      ? `Press Enter to scan ${elements.cutoffTimeInput.value} IST`
+      : "Choose a time, then press Enter"
+})
+elements.cutoffTimeInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return
+  event.preventDefault()
+  const cutoffTime = elements.cutoffTimeInput.value
+  if (!cutoffTime) {
+    showToast("Choose a cutoff time first.", "error")
+    return
+  }
+  void setAnalysisCutoff(cutoffTime)
+})
+elements.cutoffLiveButton?.addEventListener("click", () => {
+  elements.cutoffTimeInput.value = ""
+  void setAnalysisCutoff(null)
 })
 elements.autoLoginButton.addEventListener("click", () =>
   runControl(
@@ -391,13 +598,18 @@ function formatPositionMoney(value) {
 
 function renderPositions(payload) {
   const positions = Array.isArray(payload?.positions) ? payload.positions : []
+  const openCount = positions.filter((position) => position.isOpen).length
+  const exitedCount = positions.length - openCount
   const totalProfit = Number(payload?.totalProfit) || 0
   elements.positionsTotal.textContent = formatPositionMoney(totalProfit)
   elements.positionsTotal.className = totalProfit >= 0 ? "positive" : "negative"
-  elements.positionsSummary.textContent = `${positions.length} open · updated ${time.format(new Date(payload.updatedAt || Date.now()))}`
+  const countSummary = exitedCount
+    ? `${openCount} open / ${exitedCount} exited today`
+    : `${openCount} open`
+  elements.positionsSummary.textContent = `${countSummary} · updated ${time.format(new Date(payload.updatedAt || Date.now()))}`
   if (!positions.length) {
     elements.positionsList.innerHTML =
-      '<p class="positions-empty">No open positions</p>'
+      '<p class="positions-empty">No positions today</p>'
     return
   }
   elements.positionsList.innerHTML = positions
@@ -409,9 +621,17 @@ function renderPositions(payload) {
       const symbolAttribute = chartable
         ? ` data-position-symbol="${escapeHtml(stock)}" type="button"`
         : ""
-      const side = Number(position.quantity) < 0 ? "SELL" : "BUY"
+      const side = position.isOpen === false
+        ? "EXITED"
+        : Number(position.quantity) < 0
+          ? "SELL"
+          : "BUY"
+      const exitStatus = position.strategyExit
+      const exitLabel = exitStatus?.label
+        ? `<small class="position-exit-status" data-state="${escapeHtml(exitStatus.state || "ACTIVE")}">${escapeHtml(exitStatus.label)}</small>`
+        : ""
       return `<${tag} class="position-row"${symbolAttribute}>
-      <span class="position-copy"><strong>${escapeHtml(stock)}</strong><small class="position-side" data-side="${escapeHtml(side)}">${escapeHtml(side)}</small></span>
+      <span class="position-copy"><strong>${escapeHtml(stock)}</strong><small class="position-side" data-side="${escapeHtml(side)}">${escapeHtml(side)}</small>${exitLabel}</span>
       <span class="position-profit ${profit >= 0 ? "positive" : "negative"}">${escapeHtml(formatPositionMoney(profit))}</span>
     </${tag}>`
     })
@@ -441,6 +661,56 @@ async function refreshPositions() {
   }
 }
 
+function renderPaper() {
+  /* Removed automatic delta-hedge paper UI. */
+  return
+  /*
+  const papers = Array.isArray(paperPositions) ? paperPositions : []
+  const open = papers.filter((paper) => paper.state === "OPEN")
+  const scannerState = paperAuto?.state || "waiting"
+  elements.paperScannerStatus.dataset.state = scannerState
+  elements.paperScannerMessage.textContent = paperAuto?.message || "Waiting for the live feed and 09:20 IST."
+  elements.paperState.textContent = open.length ? `${open.length} LIVE` : papers.length ? "CLOSED" : "PAPER"
+  elements.paperState.dataset.state = open.length ? "open" : papers.length ? "closed" : "idle"
+  if (!papers.length) {
+    elements.paperSummary.textContent = paperAuto?.message || "Automatic paper scan begins after 09:20 IST."
+    elements.paperMetrics.hidden = true
+    return
+  }
+  elements.paperSummary.textContent = `${open.length} active hedge setup(s) · ${paperAuto?.message || "paper marks"}`
+  elements.paperMetrics.hidden = false
+  elements.paperMetrics.innerHTML = papers.map((paper) => {
+    const pnl = Number.isFinite(Number(paper.paperPnl)) ? Number(paper.paperPnl) : Number(paper.realizedPnl) || 0
+    return `<section class="delta-paper-card" data-paper-id="${escapeHtml(paper.id)}"><div><strong>${escapeHtml(paper.stock)} ${escapeHtml(paper.optionType)} · ${paper.lot} qty</strong><small>${escapeHtml(paper.state)} · ${escapeHtml(paper.exitReason || paper.quoteStatus || "marking")}</small></div><div><small>Option: entry → live mark</small><strong>${number.format(paper.optionEntry)} → ${number.format(paper.optionMark)}</strong></div><div><small>Portfolio SL / target</small><strong>${escapeHtml(formatPositionMoney(paper.stopPnl))} / ${escapeHtml(formatPositionMoney(paper.targetPnl))}</strong></div><div><small>Stock hedge</small><strong>${paper.hedgeQty > 0 ? "BUY" : "SELL"} ${Math.abs(paper.hedgeQty)} shares · ${number.format(paper.cashMark)}</strong></div><div><small>Estimated / net Δ</small><strong>${number.format(paper.estimatedDelta)} / ${number.format(paper.netDelta)}</strong></div><div><small>Combined P&L · rebalances</small><strong class="${pnl >= 0 ? "positive" : "negative"}">${escapeHtml(formatPositionMoney(pnl))} · ${paper.rebalanceCount}</strong></div></section>`
+  }).join("")
+  */
+}
+
+function renderRzyPaper(payload) {
+  /* RZY paper radar removed. */
+  return
+  /*
+  const scanner = payload?.scanner || {}
+  const positions = Array.isArray(payload?.positions) ? payload.positions : []
+  const open = positions.filter((position) => position.state === "OPEN")
+  elements.rzyPaperScannerStatus.dataset.state = scanner.state || "waiting"
+  elements.rzyPaperScannerMessage.textContent = scanner.message || "Waiting for the live feed and 09:20 IST."
+  elements.rzyPaperState.textContent = open.length ? `${open.length} LIVE` : "Paper"
+  elements.rzyPaperState.dataset.state = open.length ? "open" : "waiting"
+  elements.rzyPaperList.innerHTML = positions.length ? positions.map((position) => `<section class="delta-paper-card"><div><strong>${escapeHtml(position.stock)} ${escapeHtml(position.side)}</strong><small>${escapeHtml(position.state)}${position.exitReason ? ` · ${escapeHtml(position.exitReason)}` : ""}</small></div><div><small>Entry → live mark</small><strong>${number.format(position.entry)} → ${number.format(position.mark)}</strong></div><div><small>SL / target</small><strong>${number.format(position.stop)} / ${number.format(position.target)}</strong></div><div><small>Paper P&L</small><strong class="${Number(position.paperPnl) >= 0 ? "positive" : "negative"}">${escapeHtml(formatPositionMoney(position.paperPnl))}</strong></div></section>`).join("") : '<p class="panel-empty">No RZY setup yet</p>'
+  */
+}
+
+/*
+async function refreshRzyPaper() {
+  try {
+    const response = await fetch("/api/rzy-paper", { headers: { Accept: "application/json" }, cache: "no-store" })
+    const payload = await response.json()
+    if (response.ok && payload.ok) renderRzyPaper(payload)
+  } catch {}
+}
+*/
+
 function setFeedStatus(state, message) {
   if (!elements.connectionChip || !elements.connectionText) return
   elements.connectionChip.dataset.state = state
@@ -450,7 +720,6 @@ function setFeedStatus(state, message) {
 async function selectStock(symbol) {
   const nifty50 = symbol === NIFTY50_SYMBOL
   if (!nifty50 && !stocks.has(symbol)) return
-  if (nifty50 && niftyRequestPending) return
   const symbolChanged = selectedSymbol !== symbol
   selectedSymbol = symbol
   if (nifty50 && symbolChanged) candles = []
@@ -462,24 +731,24 @@ async function selectStock(symbol) {
     elements.chartEmpty.textContent = "Loading candles..."
     elements.chartEmpty.hidden = false
   }
-  elements.niftyChartButton.disabled = nifty50
   paintSelectedQuote()
   const request = ++chartRequest
-  if (nifty50) niftyRequestPending = true
   try {
     const response = await fetch(
-      `/api/candles/${encodeURIComponent(symbol)}?limit=360`,
+      `/api/candles/${encodeURIComponent(symbol)}?limit=${CHART_CANDLE_FETCH_LIMIT}${nifty50 ? "" : "&refresh=1"}`,
+      { cache: "no-store", headers: { Accept: "application/json" } },
     )
     const result = await response.json()
     if (!response.ok)
       throw new Error(result.message || "Unable to load candles")
     if (request !== chartRequest) return
-    candles = result.candles || []
+    candles = recentChartSessions(result.candles || [])
     liveMinute = null
+    const visibleCandleCount = Math.min(candles.length, CHART_VISIBLE_CANDLE_LIMIT)
     elements.chartSubtitle.textContent = candles.length
       ? nifty50
-        ? `${candles.length} NIFTY 50 candles · FYERS one-minute history`
-        : `${candles.length} stored candles · pre-history + live stream`
+        ? `${visibleCandleCount} chart candles · FYERS one-minute history`
+        : `${visibleCandleCount} chart candles · pre-history + live stream`
       : "No stored candles yet. Fetch pre candles or start the live stream."
     elements.chartEmpty.textContent = nifty50
       ? "NIFTY 50 candle data is unavailable."
@@ -495,8 +764,6 @@ async function selectStock(symbol) {
     elements.chartEmpty.hidden = false
     drawChart()
   } finally {
-    if (nifty50) niftyRequestPending = false
-    if (request === chartRequest) elements.niftyChartButton.disabled = false
   }
 }
 
@@ -543,244 +810,10 @@ function upsertCandle(candle) {
   const index = candles.findIndex((item) => item.time === candle.time)
   if (index >= 0) candles[index] = candle
   else candles.push(candle)
-  candles.sort((a, b) => a.time - b.time)
-  candles = candles.slice(-360)
+  candles = recentChartSessions(candles)
   elements.chartEmpty.hidden = candles.length > 0
-  elements.chartSubtitle.textContent = `${candles.length} candles · live minute updating`
+  elements.chartSubtitle.textContent = `${Math.min(candles.length, CHART_VISIBLE_CANDLE_LIMIT)} chart candles · live minute updating`
   drawChart()
-}
-
-function renderStrategySignals(signals) {
-  if (!signals.length) {
-    elements.strategySignalGroups.innerHTML = radarStrategies
-      .map(
-        (strategy) => `
-      <section class="strategy-signal-group">
-        <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3></div>
-        <p class="strategy-empty">-N/A-</p>
-      </section>`,
-      )
-      .join("")
-    return
-  }
-  const groups = new Map(radarStrategies.map((strategy) => [strategy, []]))
-  for (const signal of signals) {
-    const strategy = signal.strategy || "Other strategies"
-    if (!groups.has(strategy)) groups.set(strategy, [])
-    groups.get(strategy).push(signal)
-  }
-  elements.strategySignalGroups.innerHTML = [...groups.entries()]
-    .map(
-      ([strategy, items]) => `
-    <section class="strategy-signal-group">
-      <div class="strategy-group-heading"><h3>${escapeHtml(strategy)}</h3></div>
-      <div class="strategy-signal-list">${
-        items.length
-          ? items
-              .map((signal) => {
-                const at = Date.parse(signal.time)
-                const signalTime = Number.isFinite(at)
-                  ? radarDateTime.format(new Date(at))
-                  : "Time unavailable"
-                const direction = String(
-                  signal.direction || "BUY",
-                ).toUpperCase()
-                const active = signal.status === "Active" && Boolean(signal.id)
-                const disabled = active ? "" : " disabled"
-                const buttonTitle = active
-                  ? `Place ${direction} cash order`
-                  : String(signal.status || "Signal unavailable")
-                const entry = Number(signal.price)
-                const exit = strategySignalExitPrice(signal)
-                const livePrice = Number(stocks.get(signal.symbol)?.price)
-                const markPrice = active ? livePrice : exit
-                const signalReturn = calculateStrategyReturn(
-                  direction,
-                  entry,
-                  markPrice,
-                )
-                const result = Number.isFinite(signalReturn)
-                  ? signalReturn >= 0
-                    ? "profit"
-                    : "loss"
-                  : "unavailable"
-                const returnText = formatStrategyReturn(signalReturn)
-                const returnMarkup =
-                  entry > 0
-                    ? `<span class="strategy-signal-return" data-result="${result}" data-live="${active}" data-return-symbol="${escapeHtml(signal.symbol)}" data-entry-price="${entry}" data-direction="${escapeHtml(direction)}">${escapeHtml(returnText)}</span>`
-                    : ""
-                return `<div class="strategy-signal-row">
-          <button type="button" class="strategy-signal-copy" data-symbol="${escapeHtml(signal.symbol)}" aria-label="Open ${escapeHtml(signal.symbol)} chart">
-            <strong>${escapeHtml(signal.symbol)}</strong><time datetime="${escapeHtml(signal.time)}">${escapeHtml(signalTime)}</time>
-          </button>
-          <div class="strategy-order-wrap">
-            <button type="button" class="strategy-order-button" data-side="${escapeHtml(direction)}" data-radar-order="${escapeHtml(signal.id || "")}" data-symbol="${escapeHtml(signal.symbol)}" title="${escapeHtml(buttonTitle)}"${disabled}>${escapeHtml(direction)}</button>
-            ${returnMarkup}
-          </div>
-        </div>`
-              })
-              .join("")
-          : `<p class="strategy-empty">-N/A-</p>`
-      }</div>
-    </section>`,
-    )
-    .join("")
-}
-
-function calculateStrategyReturn(direction, entry, markPrice) {
-  if (!(entry > 0) || !(markPrice > 0)) return NaN
-  return (
-    (direction === "SELL" ? 1 - markPrice / entry : markPrice / entry - 1) * 100
-  )
-}
-
-function strategySignalExitPrice(signal) {
-  const recordedExit = Number(signal.exitPrice)
-  if (Number.isFinite(recordedExit) && recordedExit > 0) return recordedExit
-  const status = String(signal.status || "").toLowerCase()
-  if (status === "target reached") return Number(signal.target)
-  if (status === "stopped") return Number(signal.stop)
-  return NaN
-}
-
-function formatStrategyReturn(value) {
-  return Number.isFinite(value)
-    ? `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`
-    : "—"
-}
-
-function updateActiveStrategyReturns(symbol = null) {
-  for (const element of document.querySelectorAll(
-    '.strategy-signal-return[data-live="true"]',
-  )) {
-    const signalSymbol = element.dataset.returnSymbol
-    if (symbol && signalSymbol !== symbol) continue
-    const livePrice = Number(stocks.get(signalSymbol)?.price)
-    const entry = Number(element.dataset.entryPrice)
-    const direction = String(element.dataset.direction || "BUY").toUpperCase()
-    const value = calculateStrategyReturn(direction, entry, livePrice)
-    element.textContent = formatStrategyReturn(value)
-    element.dataset.result = Number.isFinite(value)
-      ? value >= 0
-        ? "profit"
-        : "loss"
-      : "unavailable"
-  }
-}
-
-function radarSignalId(signal) {
-  return (
-    signal.id ||
-    `${signal.strategy || "strategy"}:${signal.symbol || "stock"}:${signal.time || "time"}`
-  )
-}
-
-function notifyNewRadarSignals(signals) {
-  if (!radarSignalsInitialized) {
-    for (const signal of signals) knownRadarSignalIds.add(radarSignalId(signal))
-    radarSignalsInitialized = true
-    return
-  }
-  for (const signal of signals) {
-    const id = radarSignalId(signal)
-    if (knownRadarSignalIds.has(id)) continue
-    knownRadarSignalIds.add(id)
-    if (
-      signal.status !== "Active" ||
-      !("Notification" in window) ||
-      Notification.permission !== "granted"
-    )
-      continue
-    const direction = String(signal.direction || "BUY").toUpperCase()
-    const at = Date.parse(signal.time)
-    const signalTime = Number.isFinite(at)
-      ? radarDateTime.format(new Date(at))
-      : "Now"
-    const notification = new Notification(`${direction} ${signal.symbol}`, {
-      body: `${signal.strategy || "Strategy Radar"}\n${signalTime}`,
-      tag: `strategy-radar:${id}`,
-      renotify: true,
-      requireInteraction: true,
-    })
-    notification.onclick = () => {
-      window.focus()
-      void selectStock(signal.symbol)
-      notification.close()
-    }
-  }
-}
-
-function updateRadarAlertButton() {
-  const supported = "Notification" in window
-  const permission = supported ? Notification.permission : "unsupported"
-  elements.radarAlertButton.dataset.state = permission
-  elements.radarAlertButton.textContent =
-    permission === "granted"
-      ? "Alerts on"
-      : permission === "denied"
-        ? "Alerts blocked"
-        : permission === "unsupported"
-          ? "Alerts unavailable"
-          : "Enable alerts"
-  elements.radarAlertButton.setAttribute(
-    "aria-pressed",
-    String(permission === "granted"),
-  )
-}
-
-async function enableRadarNotifications() {
-  if (!("Notification" in window)) {
-    showToast("Windows notifications are unavailable in this browser.", "error")
-    return
-  }
-  let permission = Notification.permission
-  if (permission === "default")
-    permission = await Notification.requestPermission()
-  updateRadarAlertButton()
-  if (permission === "granted") {
-    new Notification("Strategy Radar alerts enabled", {
-      body: "New live signals will appear as Windows notifications.",
-    })
-    showToast("Strategy Radar Windows notifications enabled.", "success")
-  } else {
-    showToast(
-      "Allow notifications for this site in the browser settings.",
-      "error",
-    )
-  }
-}
-
-async function placeRadarCashOrder(button) {
-  if (button.disabled) return
-  const signalId = button.dataset.radarOrder
-  const symbol = button.dataset.symbol
-  const direction = button.dataset.side || "BUY"
-  if (!window.confirm(`Place live cash ${direction} order for ${symbol}?`))
-    return
-  const previousLabel = button.textContent
-  button.disabled = true
-  button.textContent = "QUEUING…"
-  try {
-    const response = await fetch("/api/control/radar-cash-order", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ signalId }),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok || !payload.ok)
-      throw new Error(payload.message || "Cash order could not be queued.")
-    button.textContent = "QUEUED"
-    showToast(
-      payload.message || `${direction} cash order queued for ${symbol}.`,
-    )
-  } catch (error) {
-    button.disabled = false
-    button.textContent = previousLabel
-    showToast(error.message, "error")
-  }
 }
 
 function drawChart() {
@@ -797,21 +830,19 @@ function drawChart() {
   context.clearRect(0, 0, bounds.width, bounds.height)
   if (!candles.length) return
 
-  const data = candles.slice(-360)
+  const priceData = candles.slice(-CHART_VISIBLE_CANDLE_LIMIT)
   const margin = { top: 22, right: 62, bottom: 35, left: 12 }
-  const volumeHeight = Math.max(55, bounds.height * 0.2)
-  const priceBottom = bounds.height - margin.bottom - volumeHeight - 12
   const plotWidth = bounds.width - margin.left - margin.right
-  const priceHeight = priceBottom - margin.top
-  const lowest = Math.min(...data.map((candle) => candle.low))
-  const highest = Math.max(...data.map((candle) => candle.high))
+  const priceHeight = bounds.height - margin.top - margin.bottom
+  const plottedPrices = priceData.flatMap((candle) => [candle.low, candle.high])
+  const lowest = Math.min(...plottedPrices)
+  const highest = Math.max(...plottedPrices)
   const padding = Math.max((highest - lowest) * 0.08, highest * 0.0005)
   const minimum = lowest - padding
   const maximum = highest + padding
   const range = maximum - minimum || 1
-  const candleSlot = plotWidth / data.length
-  const bodyWidth = Math.max(1, Math.min(7, candleSlot * 0.68))
-  const maxVolume = Math.max(1, ...data.map((candle) => candle.volume))
+  const priceCandleSlot = plotWidth / priceData.length
+  const bodyWidth = Math.max(0.2, Math.min(7, priceCandleSlot * 0.68))
   const y = (price) => margin.top + ((maximum - price) / range) * priceHeight
 
   context.font = "10px ui-monospace, monospace"
@@ -834,13 +865,13 @@ function drawChart() {
     )
   }
 
-  data.forEach((candle, index) => {
-    const x = margin.left + candleSlot * index + candleSlot / 2
+  priceData.forEach((candle, index) => {
+    const x = margin.left + priceCandleSlot * index + priceCandleSlot / 2
     const rising = candle.close >= candle.open
     const color = rising ? "#07865f" : "#d93c57"
     context.strokeStyle = color
     context.fillStyle = color
-    context.lineWidth = liveMinute?.time === candle.time ? 2 : 1
+    context.lineWidth = liveMinute?.time === candle.time ? 1.5 : Math.max(0.2, Math.min(1, priceCandleSlot * 0.45))
     context.beginPath()
     context.moveTo(x, y(candle.high))
     context.lineTo(x, y(candle.low))
@@ -853,101 +884,23 @@ function drawChart() {
       bodyWidth,
       Math.max(1, bottom - top),
     )
-    const volumeTop =
-      bounds.height - margin.bottom - (candle.volume / maxVolume) * volumeHeight
-    context.globalAlpha = 0.35
-    context.fillRect(
-      x - bodyWidth / 2,
-      volumeTop,
-      bodyWidth,
-      bounds.height - margin.bottom - volumeTop,
-    )
-    context.globalAlpha = 1
   })
 
-  drawTradeArrows(context, data, {
-    margin,
-    candleSlot,
-    priceBottom,
-    y,
-  })
-
-  const labelCount = Math.min(6, data.length)
+  const labelCount = Math.min(6, priceData.length)
   context.textAlign = "center"
   context.textBaseline = "top"
   context.fillStyle = "#718096"
   for (let label = 0; label < labelCount; label++) {
     const index = Math.round(
-      (label * (data.length - 1)) / Math.max(1, labelCount - 1),
+      (label * (priceData.length - 1)) / Math.max(1, labelCount - 1),
     )
-    const x = margin.left + candleSlot * index + candleSlot / 2
+    const x = margin.left + priceCandleSlot * index + priceCandleSlot / 2
     context.fillText(
-      axisTime.format(new Date(data[index].time * 1000)),
+      axisTime.format(new Date(priceData[index].time * 1000)),
       x,
       bounds.height - margin.bottom + 11,
     )
   }
-}
-
-function drawTradeArrows(context, data, chart) {
-  if (!selectedSymbol || selectedSymbol === NIFTY50_SYMBOL) return
-  const candleIndexByMinute = new Map(
-    data.map((candle, index) => [Math.floor(Number(candle.time) / 60), index]),
-  )
-  const marker = (at, price, direction, color) => {
-    if (!Number.isFinite(at) || !(price > 0)) return
-    const index = candleIndexByMinute.get(Math.floor(at / 60_000))
-    if (!Number.isInteger(index)) return
-    const x = chart.margin.left + chart.candleSlot * index + chart.candleSlot / 2
-    const tipY = Math.max(
-      chart.margin.top + 5,
-      Math.min(chart.priceBottom - 5, chart.y(price)),
-    )
-    drawChartArrow(context, x, tipY, direction, color)
-  }
-
-  for (const signal of strategySignals) {
-    if (signal.symbol !== selectedSymbol) continue
-    const direction = String(signal.direction || "BUY").toUpperCase()
-    marker(
-      Date.parse(signal.time),
-      Number(signal.price),
-      direction === "SELL" ? "down" : "up",
-      "#000000",
-    )
-    const exitAt = Date.parse(signal.resolvedAt)
-    const exitPrice = strategySignalExitPrice(signal)
-    marker(
-      exitAt,
-      exitPrice,
-      direction === "SELL" ? "up" : "down",
-      "#000000",
-    )
-  }
-}
-
-function drawChartArrow(context, x, tipY, direction, color) {
-  const arrowHeight = 13
-  const headWidth = 4
-  const sign = direction === "up" ? 1 : -1
-  const tailY = tipY + sign * arrowHeight
-  const headY = tipY + sign * 5
-  context.save()
-  context.strokeStyle = color
-  context.fillStyle = color
-  context.lineWidth = 2
-  context.lineCap = "round"
-  context.beginPath()
-  context.moveTo(x, tailY)
-  context.lineTo(x, headY)
-  context.stroke()
-  context.beginPath()
-  context.moveTo(x, tipY)
-  context.lineTo(x - headWidth, headY)
-  context.lineTo(x + headWidth, headY)
-  context.closePath()
-  context.fill()
-  context.restore()
 }
 
 function showToast(message, kind) {
@@ -977,11 +930,11 @@ function updateClock() {
 
 updateClock()
 setInterval(updateClock, 1000)
-updateRadarAlertButton()
 void selectStock(NIFTY50_SYMBOL)
 setInterval(() => {
   if (selectedSymbol === NIFTY50_SYMBOL) void selectStock(NIFTY50_SYMBOL)
 }, 60_000)
 refreshControlStatus().catch(() => {})
+refreshDirectionalShares().catch(() => {})
 void refreshPositions()
 setInterval(refreshPositions, 3_000)

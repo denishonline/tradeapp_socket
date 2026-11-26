@@ -91,6 +91,30 @@ it("requires real volume growth, skips the first partial minute, and persists a 
   assert.ok(emitted.some(([event]) => event === "candle:complete"))
 })
 
+it("builds index candles from price ticks even when index volume is zero", async () => {
+  const saved = []
+  const builder = createLiveCandleBuilder({
+    store: { append: async (symbol, value) => { saved.push({ symbol, value }); return { added: true } } },
+    io: { emit: () => {} },
+    indexSymbols: ["NIFTY50"],
+  })
+  const origin = friday0915 + 15 * 60
+  const tick = (price, offset) => ({ symbol: "NSE:NIFTY50-INDEX", ltp: price,
+    vol_traded_today: 0, last_traded_time: origin + offset })
+  const at = (offset) => new Date((origin + offset) * 1000)
+  builder.observe(tick(23000, 1), at(1))
+  builder.observe(tick(23001, 61), at(61))
+  builder.observe(tick(23002, 75), at(75))
+  builder.observe(tick(23003, 121), at(121))
+  await new Promise((resolve) => setImmediate(resolve))
+  builder.close()
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].symbol, "NIFTY50")
+  assert.equal(saved[0].value.open, 23001)
+  assert.equal(saved[0].value.close, 23002)
+  assert.equal(saved[0].value.volume, 0)
+})
+
 it("rejects missing source timestamps, stale ticks, and all out-of-session ticks", async () => {
   const stored = []
   const builder = createLiveCandleBuilder({

@@ -368,7 +368,10 @@ function install() {
     checkChannelGaps();
   }, Math.min(10_000, Math.max(5_000, Math.floor(FEED_GAP_MS / 3))));
   gapTimer.unref?.();
-  watchCapturedData();
+  // Recursive Windows file watching cannot keep up with hundreds of
+  // high-frequency depth files and can accumulate a very large native/event
+  // backlog. Market-feed reports channel activity directly instead.
+  if (process.env.WATCH_CAPTURED_DATA === "true") watchCapturedData();
 
   record({ level: "info", component: "server", event: "logger_started", message: "Persistent error logger started" });
   return module.exports;

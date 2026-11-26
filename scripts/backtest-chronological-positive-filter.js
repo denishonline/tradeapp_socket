@@ -13,6 +13,7 @@ import { createFailedBidAbsorptionRadar } from "../ui/failed-bid-absorption.js"
 import { createRevisedAbsorptionBreakoutRadar } from "../ui/revised-absorption-breakout.js"
 import { createCandleDepthTargetRadar } from "../ui/candle-depth-target-radar.js"
 import { createChronologicalPositiveRadar } from "../ui/chronological-positive-radar.js"
+import { relaxedChronologicalPositiveBranch } from "../ui/chronological-positive-relaxed-rules.js"
 
 const ROOT = process.cwd()
 const MINUTE = 60_000
@@ -54,7 +55,7 @@ function validTime(time) {
 }
 
 function usage() {
-  console.error("Usage: node scripts/backtest-chronological-positive-filter.js --date YYYY-MM-DD [--until HH:MM] [--strategy NAME] [--summary]")
+  console.error("Usage: node scripts/backtest-chronological-positive-filter.js --date YYYY-MM-DD [--until HH:MM] [--strategy NAME] [--relaxed] [--summary]")
   console.error("By default, all live Strategy Radar engines are replayed through the full cash-market session.")
 }
 
@@ -206,6 +207,7 @@ if (hasArgument("--help") || hasArgument("-h")) {
 const date = argumentValue("--date")
 const until = argumentValue("--until", "15:31")
 const strategyFilter = argumentValue("--strategy")
+const relaxed = hasArgument("--relaxed")
 if (!date || !validDate(date) || !validTime(until)) {
   usage()
   console.error("\n--date must be a valid date and --until must use HH:MM.")
@@ -252,7 +254,18 @@ const candleStore = {
   },
 }
 
-const radars = STRATEGY_FACTORIES.map(([name, factory]) => ({
+const factories = relaxed
+  ? [["Chronological Positive Relaxed (Research)", ({ now } = {}) => createChronologicalPositiveRadar({
+    now,
+    branchSelector: relaxedChronologicalPositiveBranch,
+    strategyName: "Chronological Positive Relaxed (Research)",
+    calibration: "relaxed research only; not a live rule",
+  })]]
+  : strategyFilter
+    ? STRATEGY_FACTORIES.filter(([name]) => name.toLowerCase().includes(strategyFilter.toLowerCase()))
+    : STRATEGY_FACTORIES
+if (!factories.length) throw new Error(`No Strategy Radar engine matches: ${strategyFilter}`)
+const radars = factories.map(([name, factory]) => ({
   name,
   engine: factory({ now: () => clock }),
 }))
@@ -291,7 +304,7 @@ const lastPrices = new Map(closingPrices)
 let processedDepth = 0
 let processedPrices = 0
 const replayStartedAt = Date.now()
-console.error(`Replaying ${date} through ${STRATEGY_FACTORIES.length} live radar strategies (${symbols.length} stocks)...`)
+console.error(`Replaying ${date} through ${factories.length} ${relaxed ? 'relaxed research' : 'live radar'} strategy engine(s) (${symbols.length} stocks)...`)
 
 function deliverCandle(event) {
   clock = event.at
@@ -357,7 +370,7 @@ const signals = rawSignals
     left.symbol.localeCompare(right.symbol))
 
 const byStrategy = {}
-for (const name of STRATEGY_FACTORIES.map(([name]) => name)) {
+for (const name of factories.map(([name]) => name)) {
   const rows = signals.filter((signal) => signal.strategy === name)
   if (strategyFilter && !name.toLowerCase().includes(strategyFilter.toLowerCase()) && !rows.length) continue
   byStrategy[name] = {
@@ -373,7 +386,9 @@ for (const name of STRATEGY_FACTORIES.map(([name]) => name)) {
 const output = {
   date,
   replayUntil: until,
-  mode: "chronological replay through the same live Strategy Radar engines",
+  mode: relaxed
+    ? "chronological replay through a relaxed research-only Chronological Positive engine"
+    : "chronological replay through the same live Strategy Radar engines",
   assumptions: {
     timerFlush: "one-second chronological flush",
     candleAvailability: "one-minute candle delivered only after its minute completes",
@@ -383,7 +398,7 @@ const output = {
   },
   coverage: {
     stocks: symbols.length,
-    strategies: STRATEGY_FACTORIES.length,
+    strategies: factories.length,
     depthEvents: processedDepth,
     priceEvents: processedPrices,
   },
@@ -400,8 +415,12 @@ const output = {
 }
 
 const untilSuffix = until === "15:31" ? "" : `-until-${until.replace(":", "")}`
-const strategySuffix = strategyFilter ? `-${strategyFilter.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}` : ""
-const outputPath = path.join(ROOT, "reports", `live-radar-backtest-${date}${untilSuffix}${strategySuffix}.json`)
+const strategySuffix = relaxed ? "-chronological-positive-relaxed-research" : strategyFilter
+  ? `-${strategyFilter.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}` : ""
+const outputStem = `live-radar-backtest-${date}${untilSuffix}${strategySuffix}`
+let outputPath = path.join(ROOT, "reports", `${outputStem}.json`)
+let outputRevision = 2
+while (fs.existsSync(outputPath)) outputPath = path.join(ROOT, "reports", `${outputStem}-${outputRevision++}.json`)
 fs.mkdirSync(path.dirname(outputPath), { recursive: true })
 fs.writeFileSync(outputPath, JSON.stringify(output, null, 2))
 const consoleOutput = hasArgument("--summary") ? { ...output, signals: undefined } : output
